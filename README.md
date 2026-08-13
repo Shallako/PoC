@@ -1,12 +1,14 @@
 # Shoulico -- local MVP
 
 Story -> scenes -> engine-targeted prompts -> images -> narration script ->
-narration audio -> export.
+narration audio -> video -> export.
 
 Image creation defaults to **Seedream 5.0 Pro** through the Renderful API.
 Narration is spoken by **ElevenLabs Flash v2.5**, through the same API and the
-same key. Scope is **images, narration script and narration audio** -- no video
-assembly, no accounts, no billing layer.
+same key. The cut is assembled **on this machine** with ffmpeg -- nothing is
+uploaded and nothing is billed for it. Scope is **images, narration script,
+narration audio and a finished MP4** -- no generated video clips, no accounts,
+no billing layer.
 
 Claude writes one narration line per scene (PRD FR-1201/1203/1206) and you review
 and edit it before anything is spoken. Synthesis is a separate, confirmed step:
@@ -29,6 +31,14 @@ python -m venv .venv
 
 (The venv already exists if you're reading this on the machine it was built on.)
 
+**ffmpeg, for step 5 only.** `winget install Gyan.FFmpeg` on Windows, `brew
+install ffmpeg` on macOS. Everything except assembling the MP4 works without it,
+captions and the timing sheet included, and the app says so rather than failing:
+the panel prints the install command and `assemble` answers 424, not 500. winget
+appends its `bin` to the persistent user PATH, so **restart the terminal and the
+app** afterwards -- a running process keeps the environment it started with.
+`SHOULICO_FFMPEG` takes a full path if PATH does not reach it.
+
 ## Keys
 
 | Key | Used for | Lookup order |
@@ -37,10 +47,11 @@ python -m venv .venv
 | Anthropic | segmentation, prompt writing, narration | `ANTHROPIC_API_KEY` -> `PoC\anthropic_key.txt` -> `Renderful\anthropic_key.txt` -> an `ant auth login` profile |
 
 Both keys are present on this machine (`PoC\api_key.txt` and
-`PoC\anthropic_key.txt`), so all five steps are live. Without an Anthropic key,
+`PoC\anthropic_key.txt`), so all six steps are live. Without an Anthropic key,
 step 1 (segment) and the narration button stay disabled; everything else still
-works, including hand-writing prompts, rendering and speaking. A key that is present but
-does not start with `sk-ant-` is flagged in the UI rather than shown green.
+works, including hand-writing prompts, rendering and speaking. A key that is
+present but does not start with `sk-ant-` is flagged in the UI rather than shown
+green.
 
 Keys are read on demand, never logged, never sent to the browser, and never
 written into a project file. The UI only ever sees a found/missing boolean.
@@ -124,7 +135,7 @@ spend money.
 
 ---
 
-## The five steps
+## The six steps
 
 1. **Story** -- paste up to 5,000 characters in any language, pick the image count
    and the engine. Engine parameters are rendered from the registry schema and
@@ -373,10 +384,18 @@ mistake above.
 
 ## Not built (deliberately)
 
-Video assembly / Seedance, SRT/VTT captions, billing and credits, accounts and
-auth, sharing links. Multi-user concerns from the PRD (Postgres, Redis, S3, KMS,
-spend caps at an orchestrator) collapse here to: the filesystem, `manifest.json`,
-a thread pool, and a confirmation dialog.
+**Generated video clips / Seedance.** Reasoned through under *Getting to a
+finished video* above: it costs 2--4x the whole rest of the project, returns
+fixed-length silent clips against variable-length narration, and still leaves
+the assembly step to be done locally. A still holds any length for free.
+
+**Billing and credits, accounts and auth, sharing links.** Multi-user concerns
+from the PRD (Postgres, Redis, S3, KMS, spend caps at an orchestrator) collapse
+here to: the filesystem, `manifest.json`, a thread pool, and a confirmation
+dialog.
+
+Video assembly and SRT/VTT captions were on this list and are now built -- steps
+5 and 6.
 
 ## Tests
 
@@ -405,11 +424,8 @@ developer's PATH. Otherwise the suite proves different things on different
 machines, and silently stops proving that one the moment somebody installs
 ffmpeg.
 
-**Installing ffmpeg.** `winget install Gyan.FFmpeg` on Windows, `brew install
-ffmpeg` on macOS. winget appends its `bin` to the persistent user PATH, so
-**restart the terminal and the app** afterwards -- an already-running process
-keeps the environment it started with. `SHOULICO_FFMPEG` overrides the lookup
-with a full path if PATH does not reach it.
+Installing ffmpeg is under *Install* above -- and the restart it needs applies to
+the test run too.
 
 The live suite talks to the real Renderful and Anthropic accounts. It is skipped
 unless you pass --live, renders one 1K image (SHOULICO_LIVE_IMAGE_BUDGET, default
