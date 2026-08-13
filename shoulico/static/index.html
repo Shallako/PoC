@@ -155,7 +155,8 @@
           <input type="number" id="sceneCount" min="1" max="40" value="12">
         </div>
         <div style="flex:2">
-          <label><span data-i18n="s1.style">Style direction (optional)</span></label>
+          <label><span data-i18n="s1.style">Style direction (optional, applies to all images)</span><button
+                  type="button" class="hlp" data-help="help.styleHint" aria-label="?">?</button></label>
           <input type="text" id="styleHint" data-i18n-ph="s1.style.ph"
                  placeholder="e.g. bold anime linework, cel-shaded, summer 1992">
         </div>
@@ -516,6 +517,7 @@ const DYN = {
   "scene.audio.estimated": "≈{seconds}s estimated",
   "confirm.speak.one": "Send 1 line to Renderful to be spoken{cost}?\n\nThis spends real credit.",
   "confirm.speak.many": "Send {count} lines to Renderful to be spoken{cost}?\n\nThis spends real credit.",
+  "help.styleHint": "One instruction for the whole set, not for a single image. Claude folds it into the shared style block — art style, period, palette, recurring characters, wardrobe — and that block is appended to every scene prompt, which is what keeps the images looking like one series instead of {count} unrelated pictures. It is read when you press Segment, so editing it afterwards changes nothing on its own: either segment again, or edit the style block directly on step 2, which is faster and does not rewrite your prompts.",
   "help.promptLang": "Scene prompts and the shared style block come back in the language the story is written in, so you can read and edit them. Image engines are trained mostly on English text, so if a prompt in your language renders badly, switch this to English and segment again — titles, beats and the narration script stay in your language either way.",
   "help.renderScene": "Sends this one scene to {engine} straight away and spends about {price}. No other scene is touched. If the scene already has an image, the new one is saved as a new version (v02, v03…) and the old file stays on disk. You are asked to confirm before anything is spent.",
   "help.renderBatch": "Renders every scene in the list above: the ones with no image yet, plus any whose prompt changed since it was rendered. Scenes that already match their prompt are skipped, so this never pays twice for the same image. Preview cost shows the exact list first.",
@@ -631,7 +633,10 @@ function helpVars(btn) {
   // A per-line speech price is carried on the button: it depends on the length
   // of that line, not on a single figure for the project.
   const price = (btn && btn.dataset.helpPrice) || money(pricePerImage());
-  return { engine, price };
+  // What the user is about to ask for, not what is on disk: the style field is
+  // read at Segment time, so the number in its explanation is the field's.
+  const count = Number($("sceneCount").value) || (P && P.scene_count) || 0;
+  return { engine, price, count };
 }
 function pricePerImage() {
   if (PLAN && typeof PLAN.price_per_image === "number") return PLAN.price_per_image;

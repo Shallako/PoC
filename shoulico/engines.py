@@ -38,11 +38,11 @@ DEFAULT_REGISTRY: dict[str, Any] = {
                           "on 2026-08-12 billed 0.045. The real charge comes back on the "
                           "submit response and is stored in manifest.json.",
             "dialect": {
-                "strip_mj_flags": True,
                 "supports_negative_prompt": False,
                 "strip_quoted_dialogue": True,
                 "notes": [
-                    "Reads Midjourney flags (--ar/--v/--sref/--sw) as literal text; they are stripped.",
+                    "Reads command-line-style flags (--ar/--v/--stylize) as literal text; "
+                    "keep them out of the prompt.",
                     "No negative-prompt parameter: exclusions have to be phrased positively, in words.",
                     "Quoted dialogue tends to be rendered as on-image text.",
                     "Cannot count reliably -- state exact counts plainly and repeat them.",
@@ -85,7 +85,6 @@ DEFAULT_REGISTRY: dict[str, Any] = {
             "price_note": "Unverified. Check the model id and pricing in your Renderful "
                           "dashboard before rendering a batch.",
             "dialect": {
-                "strip_mj_flags": True,
                 "supports_negative_prompt": False,
                 "strip_quoted_dialogue": True,
                 "notes": ["Unverified engine: render one scene first, then the batch."],
