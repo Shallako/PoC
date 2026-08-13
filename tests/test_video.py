@@ -216,8 +216,9 @@ def test_captions_are_served_on_their_own(client, claude, api):
 # The CapCut hand-off
 # --------------------------------------------------------------------- #
 
-def test_export_writes_captions_and_a_timing_sheet_without_any_ffmpeg(client, claude, api):
-    assert not video.available() or True   # the point: this path never calls ffmpeg
+def test_export_writes_captions_and_a_timing_sheet_without_any_ffmpeg(client, claude,
+                                                                      api, ffmpeg):
+    """The hand-off route has no dependency at all, which is its whole appeal."""
     pid = segmented(client, scenes=2)
     ready(client, pid, api)
 
@@ -226,6 +227,8 @@ def test_export_writes_captions_and_a_timing_sheet_without_any_ffmpeg(client, cl
     assert body["captions"] in names and body["captions_vtt"] in names
     assert body["timing"] in names
     assert body["runtime_seconds"] > 0 and body["runtime_measured"] is True
+    # An available ffmpeg was deliberately installed above and never invoked.
+    assert ffmpeg.calls == []
 
 
 def test_the_timing_sheet_survives_a_narration_line_full_of_commas(client, claude, api):
@@ -250,7 +253,8 @@ def test_the_timing_sheet_survives_a_narration_line_full_of_commas(client, claud
 # Assembly
 # --------------------------------------------------------------------- #
 
-def test_without_ffmpeg_the_app_says_so_and_offers_the_remedy(client, claude, api):
+def test_without_ffmpeg_the_app_says_so_and_offers_the_remedy(client, claude, api,
+                                                              no_ffmpeg):
     pid = segmented(client, scenes=1)
     ready(client, pid, api, spoken=False)
 
@@ -501,20 +505,78 @@ def test_the_page_carries_the_video_controls(client):
 # The one claim the fake cannot make
 # --------------------------------------------------------------------- #
 
-@needs_ffmpeg
-def test_a_real_ffmpeg_accepts_the_command_this_project_builds(client, claude, api,
-                                                               tmp_path):
-    """Proves the filtergraph is valid, which no fake binary can.
+def probe(path: Path) -> dict:
+    """What ffmpeg thinks it wrote. A file that exists is not a video."""
+    import json
+    import shutil as _shutil
+    import subprocess as _subprocess
 
-    Local encode only -- no API, no money.
+    exe = _shutil.which("ffprobe")
+    assert exe, "ffprobe ships with ffmpeg; if this is missing the install is odd"
+    done = _subprocess.run(
+        [exe, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams",
+         str(path)], capture_output=True, text=True, timeout=120, check=True)
+    return json.loads(done.stdout)
+
+
+def real_cut(client, pid, api, **settings) -> Path:
+    if settings:
+        stored = store.video_settings(store.load(pid))
+        r = client.post(f"/api/projects/{pid}/video/settings",
+                        json={"params": {**stored, **settings}})
+        assert r.status_code == 200, r.text
+    assemble(client, pid)
+    job = wait_for_job(pid, timeout=600, kind=orchestrator.KIND_VIDEO)
+    assert not job.fatal, job.fatal
+    out = store.video_dir(pid) / project(client, pid)["video"]["file"]
+    assert out.is_file()
+    return out
+
+
+@needs_ffmpeg
+def test_a_real_ffmpeg_produces_a_playable_cut_of_the_right_length(client, claude, api):
+    """The claim no fake can make: ffmpeg accepts this filtergraph and it plays.
+
+    Local encode only -- no API call, no money. This is where a zoompan frame-count
+    mistake or a bad filter would surface, because a wrong `d` does not error, it
+    silently produces a video of the wrong length.
     """
     pid = segmented(client, scenes=2)
     ready(client, pid, api)
+    beats = beat_list(client, pid)
+    expected = timeline.total_seconds(beats)
 
-    assemble(client, pid)
-    wait_for_job(pid, timeout=600, kind=orchestrator.KIND_VIDEO)
+    info = probe(real_cut(client, pid, api))
+    kinds = {s["codec_type"]: s for s in info["streams"]}
 
-    proj = project(client, pid)
-    assert not (orchestrator.job_for(pid, orchestrator.KIND_VIDEO).fatal)
-    out = store.video_dir(pid) / proj["video"]["file"]
-    assert out.is_file() and out.stat().st_size > 10_000
+    assert "video" in kinds and "audio" in kinds
+    assert (kinds["video"]["width"], kinds["video"]["height"]) == (1920, 1080)
+    # Soft subtitles are the default, and a track nobody can find is not a caption.
+    assert "subtitle" in kinds
+    # The real proof: the container is as long as the narration said it would be.
+    assert float(info["format"]["duration"]) == pytest.approx(expected, abs=0.5)
+
+
+@needs_ffmpeg
+def test_a_real_ffmpeg_burns_captions_into_the_picture(client, claude, api):
+    """Burn-in needs libass and a subtitles= path Windows does not mangle."""
+    pid = segmented(client, scenes=1)
+    ready(client, pid, api)
+
+    info = probe(real_cut(client, pid, api, subtitles="burn"))
+    kinds = {s["codec_type"] for s in info["streams"]}
+
+    assert "video" in kinds and "audio" in kinds
+    # Burned captions are pixels, so there must be no subtitle track left over.
+    assert "subtitle" not in kinds
+
+
+@needs_ffmpeg
+def test_a_real_ffmpeg_holds_a_still_for_the_whole_scene(client, claude, api):
+    """The no-motion path loops its input; a wrong loop gives a one-frame video."""
+    pid = segmented(client, scenes=2)
+    ready(client, pid, api)
+    expected = timeline.total_seconds(beat_list(client, pid))
+
+    info = probe(real_cut(client, pid, api, motion="none"))
+    assert float(info["format"]["duration"]) == pytest.approx(expected, abs=0.5)

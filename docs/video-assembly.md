@@ -149,9 +149,36 @@ cut, so the reverse order would have meant exporting twice.
 
 `tests/fake_ffmpeg.py` fakes at `subprocess.run`, not at the module boundary, so
 every filtergraph and codec flag is constructed for real and asserted on. What no
-fake can prove is that ffmpeg *accepts* the command line; that claim is one test
-marked `needs_ffmpeg`, which skips unless a real binary is installed. It encodes
-locally and spends nothing, so it is not a `live` test.
+fake can prove is that ffmpeg *accepts* the command line; that claim belongs to
+three tests marked `needs_ffmpeg`, which skip unless a real binary is installed.
+They encode locally and spend nothing, so they are not `live` tests. They ffprobe
+the output and check the container length against the timeline, because a wrong
+zoompan frame count does not error -- it silently produces a video of the wrong
+length, which is the failure this whole file is most exposed to.
+
+The *missing* ffmpeg path is forced with a `no_ffmpeg` fixture rather than left
+to whatever the machine has. That test passed for the wrong reason until ffmpeg
+was installed, at which point it failed and exposed the flaw: a test of a missing
+dependency has to control that dependency, or the suite proves different things
+on different machines.
+
+## Verified live, 2026-08-13
+
+ffmpeg 9.0 (`Gyan.FFmpeg`, with libass and libx264) installed on the dev machine,
+and the encode proven end to end. No API call and no money -- assembly is local.
+
+- Three scenes from real 1424x800 renders, encoded to 1920x1080 h264 + AAC and
+  joined: **12.02s against a 12.0s timeline**, 4.47 MB, 11.8s to encode.
+- Ken Burns is genuinely moving: frames sampled at 0.1s and 3.8s of the same
+  scene differ, and the later frame is a clean ~12% push-in matching
+  `VIDEO_KEN_BURNS_ZOOM` -- tighter framing, no jitter, no crop damage.
+- Soft subtitles produce a real subtitle stream; burn-in produces none, because
+  the captions are pixels by then.
+- The still-frame path holds for the whole scene, so the `-loop` branch is right.
+
+winget appends its `bin` to the persistent user PATH, so the app must be
+restarted after installing: a running process keeps the environment it started
+with. `install_hint()` already says so.
 
 ## Follow-ups
 

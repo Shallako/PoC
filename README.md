@@ -381,7 +381,7 @@ a thread pool, and a confirmation dialog.
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 137 offline tests, free
+    .venv\Scripts\python -m pytest             # 140 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 The offline suite drives the real FastAPI app against a fake Renderful HTTP
@@ -393,9 +393,23 @@ against real bytes rather than a stub.
 
 Video assembly is faked at `subprocess.run`, not at the module boundary, so
 every filtergraph and codec flag is constructed for real and asserted on. What
-that cannot prove is that ffmpeg *accepts* the command line, so the one test
-making that claim is marked `needs_ffmpeg` and skips unless a real one is
-installed. It encodes locally and spends nothing, so it is not a `live` test.
+that cannot prove is that ffmpeg *accepts* the command line, so the three tests
+making that claim are marked `needs_ffmpeg` and skip unless a real one is
+installed. They encode locally and spend nothing, so they are not `live` tests --
+they ffprobe the result and check the container length against the timeline,
+because a wrong zoompan frame count does not error, it silently produces a video
+of the wrong length.
+
+The missing-ffmpeg path is forced with a fixture rather than left to the
+developer's PATH. Otherwise the suite proves different things on different
+machines, and silently stops proving that one the moment somebody installs
+ffmpeg.
+
+**Installing ffmpeg.** `winget install Gyan.FFmpeg` on Windows, `brew install
+ffmpeg` on macOS. winget appends its `bin` to the persistent user PATH, so
+**restart the terminal and the app** afterwards -- an already-running process
+keeps the environment it started with. `SHOULICO_FFMPEG` overrides the lookup
+with a full path if PATH does not reach it.
 
 The live suite talks to the real Renderful and Anthropic accounts. It is skipped
 unless you pass --live, renders one 1K image (SHOULICO_LIVE_IMAGE_BUDGET, default

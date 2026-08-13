@@ -127,9 +127,21 @@ def claude(monkeypatch):
 
 @pytest.fixture
 def ffmpeg(monkeypatch):
-    """A fake ffmpeg. Without this fixture the suite behaves as if none is installed."""
+    """A fake ffmpeg, recording every command the app builds."""
     from shoulico import video
     return fake_ffmpeg.install(monkeypatch, video)
+
+
+@pytest.fixture
+def no_ffmpeg(monkeypatch):
+    """Force the missing-ffmpeg path whatever this machine happens to have.
+
+    Tests of a missing dependency must control it. Leaving it to the developer's
+    PATH means the suite proves different things on different machines -- and
+    silently stops proving this one the moment someone installs ffmpeg.
+    """
+    from shoulico import video
+    monkeypatch.setattr(video, "ffmpeg_path", lambda: None)
 
 
 @pytest.fixture
