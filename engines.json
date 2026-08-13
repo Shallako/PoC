@@ -1,0 +1,154 @@
+{
+  "default": "seedream-5.0-pro",
+  "engines": {
+    "seedream-5.0-pro": {
+      "name": "Seedream 5.0 Pro",
+      "provider": "ByteDance (via Renderful)",
+      "strength": "Photorealism / illustration · best cost-to-quality",
+      "badges": [
+        "T2I"
+      ],
+      "verified": true,
+      "price_per_image": 0.09,
+      "price_table": {
+        "resolution": {
+          "1K": 0.045,
+          "2K": 0.09
+        }
+      },
+      "price_note": "Local estimate only, and priced by resolution: a live 1K render on 2026-08-12 billed 0.045. The real charge comes back on the submit response and is stored in manifest.json.",
+      "dialect": {
+        "strip_mj_flags": true,
+        "supports_negative_prompt": false,
+        "strip_quoted_dialogue": true,
+        "notes": [
+          "Reads Midjourney flags (--ar/--v/--sref/--sw) as literal text; they are stripped.",
+          "No negative-prompt parameter: exclusions have to be phrased positively, in words.",
+          "Quoted dialogue tends to be rendered as on-image text.",
+          "Cannot count reliably -- state exact counts plainly and repeat them.",
+          "The safety filter reads comparative age words ('the younger cousin', 'young man', 'boy', 'kid') as references to minors and rejects the whole prompt with HTTP 451, even when the character is stated elsewhere as an adult. Name an explicit adult age instead ('a man of twenty-six').",
+          "Instructions buried at the end of a long style block are partially ignored, so the scene body is sent first and the shared style block after it."
+        ]
+      },
+      "inputs": [
+        {
+          "key": "aspect_ratio",
+          "label": "Aspect ratio",
+          "type": "enum",
+          "options": [
+            "16:9",
+            "9:16",
+            "1:1",
+            "4:3",
+            "3:4"
+          ],
+          "default": "16:9",
+          "confirmed": [
+            "16:9"
+          ]
+        },
+        {
+          "key": "resolution",
+          "label": "Resolution",
+          "type": "enum",
+          "options": [
+            "1K",
+            "2K"
+          ],
+          "default": "2K",
+          "confirmed": [
+            "1K",
+            "2K"
+          ]
+        },
+        {
+          "key": "seed",
+          "label": "Seed (blank = random)",
+          "type": "seed",
+          "default": null,
+          "min": 0,
+          "max": 2147483647
+        },
+        {
+          "key": "output_format",
+          "label": "Requested format",
+          "type": "enum",
+          "options": [
+            "png",
+            "jpg"
+          ],
+          "default": "png",
+          "help": "Renderful delivers JPEG regardless; the file is saved as delivered."
+        }
+      ]
+    },
+    "custom": {
+      "name": "Custom Renderful model",
+      "provider": "Renderful",
+      "strength": "Type any model id your account supports",
+      "badges": [
+        "T2I"
+      ],
+      "verified": false,
+      "price_per_image": 0.09,
+      "price_note": "Unverified. Check the model id and pricing in your Renderful dashboard before rendering a batch.",
+      "dialect": {
+        "strip_mj_flags": true,
+        "supports_negative_prompt": false,
+        "strip_quoted_dialogue": true,
+        "notes": [
+          "Unverified engine: render one scene first, then the batch."
+        ]
+      },
+      "inputs": [
+        {
+          "key": "model_id",
+          "label": "Model id",
+          "type": "text",
+          "default": ""
+        },
+        {
+          "key": "aspect_ratio",
+          "label": "Aspect ratio",
+          "type": "enum",
+          "options": [
+            "16:9",
+            "9:16",
+            "1:1",
+            "4:3",
+            "3:4"
+          ],
+          "default": "16:9"
+        },
+        {
+          "key": "resolution",
+          "label": "Resolution",
+          "type": "enum",
+          "options": [
+            "1K",
+            "2K"
+          ],
+          "default": "2K"
+        },
+        {
+          "key": "seed",
+          "label": "Seed (blank = random)",
+          "type": "seed",
+          "default": null,
+          "min": 0,
+          "max": 2147483647
+        },
+        {
+          "key": "output_format",
+          "label": "Requested format",
+          "type": "enum",
+          "options": [
+            "png",
+            "jpg"
+          ],
+          "default": "png"
+        }
+      ]
+    }
+  }
+}

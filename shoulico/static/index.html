@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shoulico — local</title>
+<style>
+  :root{
+    --blue-600:#2563eb; --blue-50:#eff6ff; --blue-200:#bfdbfe;
+    --amber:#f59e0b; --amber-50:#fffbeb; --amber-200:#fde68a;
+    --ink:#0f172a; --slate-700:#334155; --slate-500:#64748b; --slate-400:#94a3b8;
+    --slate-200:#e2e8f0; --slate-100:#f1f5f9; --slate-50:#f8fafc;
+    --green:#16a34a; --red:#dc2626;
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+       color:var(--ink);background:var(--slate-50)}
+  header{background:#fff;border-bottom:1px solid var(--slate-200);padding:10px 18px;
+         display:flex;gap:14px;align-items:center;position:sticky;top:0;z-index:20}
+  .brand{font-weight:700;letter-spacing:-.02em}
+  .brand small{font-weight:500;color:var(--slate-500);margin-left:6px}
+  .spacer{flex:1}
+  .chip{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--slate-100);
+        color:var(--slate-700);border:1px solid var(--slate-200)}
+  .chip.ok{background:#f0fdf4;border-color:#bbf7d0;color:#15803d}
+  .chip.bad{background:#fef2f2;border-color:#fecaca;color:var(--red)}
+  nav.steps{display:flex;gap:6px;padding:12px 18px;background:#fff;
+            border-bottom:1px solid var(--slate-200);position:sticky;top:53px;z-index:19;flex-wrap:wrap}
+  nav.steps button{border:1px solid var(--slate-200);background:#fff;border-radius:999px;
+                   padding:6px 14px;cursor:pointer;color:var(--slate-700);font:inherit}
+  nav.steps button.active{background:var(--blue-600);border-color:var(--blue-600);color:#fff}
+  nav.steps button:disabled{opacity:.45;cursor:not-allowed}
+  main{max-width:1080px;margin:0 auto;padding:22px 18px 90px}
+  .panel{background:#fff;border:1px solid var(--slate-200);border-radius:var(--radius);
+         padding:18px;margin-bottom:16px}
+  h2{margin:0 0 4px;font-size:18px}
+  h3{margin:0 0 8px;font-size:14px;text-transform:uppercase;letter-spacing:.05em;color:var(--slate-500)}
+  p.hint{color:var(--slate-500);margin:0 0 14px}
+  label{display:block;font-weight:600;font-size:13px;margin:12px 0 4px}
+  input[type=text],input[type=number],select,textarea{
+    width:100%;padding:8px 10px;border:1px solid var(--slate-200);border-radius:8px;
+    font:inherit;background:#fff;color:var(--ink)}
+  textarea{resize:vertical;min-height:90px}
+  textarea.mono{font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .row>*{flex:1;min-width:160px}
+  .btn{background:var(--blue-600);color:#fff;border:1px solid var(--blue-600);
+       border-radius:8px;padding:8px 16px;font:inherit;font-weight:600;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--slate-700);border-color:var(--slate-200)}
+  .btn.spend{background:var(--amber);border-color:var(--amber);color:#3d2b00}
+  .btn.danger{background:#fff;color:var(--red);border-color:#fecaca}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.sm{padding:4px 10px;font-size:12.5px;font-weight:500}
+  .counter{float:right;font-weight:400;color:var(--slate-500);font-size:12px}
+  .counter.over{color:var(--red);font-weight:600}
+  .engine{border:1px solid var(--slate-200);border-radius:8px;padding:10px 12px;cursor:pointer;
+          flex:1;min-width:210px;background:#fff}
+  .engine.sel{border-color:var(--blue-600);background:var(--blue-50)}
+  .engine b{display:block}
+  .engine span{color:var(--slate-500);font-size:12.5px}
+  .warn{background:var(--amber-50);border:1px solid var(--amber-200);border-radius:8px;
+        padding:10px 12px;color:#78350f;margin:10px 0;font-size:13px}
+  .err{background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 12px;
+       color:#991b1b;margin:10px 0;font-size:13px;white-space:pre-wrap}
+  .note{background:var(--blue-50);border:1px solid var(--blue-200);border-radius:8px;
+        padding:10px 12px;color:#1e3a8a;margin:10px 0;font-size:13px}
+  .scene{border:1px solid var(--slate-200);border-radius:var(--radius);padding:14px;margin-bottom:12px;background:#fff}
+  .scene header{position:static;background:none;border:0;padding:0;display:flex;gap:10px;align-items:center;margin-bottom:6px}
+  .ord{background:var(--slate-100);border-radius:6px;padding:2px 8px;font-family:ui-monospace,monospace;font-size:12px}
+  .status{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--slate-200);background:var(--slate-50);color:var(--slate-700)}
+  .status.done{background:#f0fdf4;border-color:#bbf7d0;color:#15803d}
+  .status.failed{background:#fef2f2;border-color:#fecaca;color:var(--red)}
+  .status.rendering,.status.queued{background:var(--amber-50);border-color:var(--amber-200);color:#92400e}
+  .status.dirty{background:var(--blue-50);border-color:var(--blue-200);color:#1e40af}
+  details summary{cursor:pointer;color:var(--slate-500);font-size:12.5px;margin-top:6px}
+  pre.prompt{white-space:pre-wrap;background:var(--slate-50);border:1px solid var(--slate-200);
+             border-radius:8px;padding:10px;font-size:12.5px;margin:6px 0 0}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+  .card{border:1px solid var(--slate-200);border-radius:var(--radius);overflow:hidden;background:#fff}
+  .card img{width:100%;display:block;aspect-ratio:16/9;object-fit:cover;background:var(--slate-100)}
+  .card .ph{aspect-ratio:16/9;display:grid;place-items:center;color:var(--slate-400);background:var(--slate-100);font-size:13px}
+  .card .meta{padding:9px 11px}
+  .card .meta b{display:block;font-size:13px;margin-bottom:4px}
+  .costbar{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--slate-200);
+           padding:11px 18px;display:flex;gap:14px;align-items:center;z-index:25;flex-wrap:wrap}
+  .costbar .big{font-size:17px;font-weight:700}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--slate-100)}
+  th{color:var(--slate-500);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  code{font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
+  .muted{color:var(--slate-500)}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Shoulico <small>local MVP</small></div>
+  <select id="projectPicker" style="width:auto;min-width:200px"></select>
+  <button class="btn ghost sm" id="newProjectBtn">New project</button>
+  <div class="spacer"></div>
+  <span class="chip" id="keyRenderful">Renderful …</span>
+  <span class="chip" id="keyAnthropic">Claude …</span>
+</header>
+
+<nav class="steps">
+  <button data-step="1" class="active">1 · Story</button>
+  <button data-step="2">2 · Scenes &amp; prompts</button>
+  <button data-step="3">3 · Render</button>
+  <button data-step="4">4 · Export</button>
+  <div class="spacer"></div>
+  <button class="btn ghost sm" id="deleteProjectBtn">Delete project</button>
+</nav>
+
+<main>
+  <div id="alerts"></div>
+
+  <!-- ------------------------------------------------------- step 1 -->
+  <section id="step1">
+    <div class="panel">
+      <h2>Story</h2>
+      <p class="hint">Paste the story. Claude segments it into ordered visual beats and writes one
+        engine-targeted prompt per beat, plus a shared style block that keeps the set consistent.</p>
+      <label>Project name</label>
+      <input type="text" id="projName" placeholder="Boston on MV">
+      <label>Story <span class="counter" id="storyCount">0 / 5000</span></label>
+      <textarea id="story" rows="12" placeholder="Paste up to 5,000 characters…"></textarea>
+      <div class="row">
+        <div>
+          <label>Number of images</label>
+          <input type="number" id="sceneCount" min="1" max="40" value="12">
+        </div>
+        <div style="flex:3">
+          <label>Style direction (optional)</label>
+          <input type="text" id="styleHint" placeholder="e.g. bold anime linework, cel-shaded, summer 1992">
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Engine</h2>
+      <p class="hint">Parameters are validated against this schema before anything is submitted —
+        Renderful bills a request it later rejects, so a bad value has to fail here, for free.</p>
+      <div class="row" id="engineList"></div>
+      <div id="engineNotes"></div>
+      <div id="engineParams" class="row"></div>
+    </div>
+
+    <div class="panel">
+      <button class="btn" id="segmentBtn">Segment with Claude →</button>
+      <span class="muted" id="segmentMsg" style="margin-left:10px"></span>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------- step 2 -->
+  <section id="step2" class="hidden">
+    <div class="panel">
+      <h2>Shared style block</h2>
+      <p class="hint">Appended to every prompt, after the scene body. Edit freely — it is re-applied
+        to all scenes on save.</p>
+      <textarea id="styleProfile" class="mono" rows="7"></textarea>
+    </div>
+
+    <div class="panel">
+      <h2>Narration script</h2>
+      <p class="hint">Script only — no synthesis. Per-scene lines are written to text files that share
+        the image filename, so an editor lines the pair up automatically.</p>
+      <div class="row">
+        <div style="flex:3">
+          <label>Narrator voice / tone (optional)</label>
+          <input type="text" id="narrVoice" placeholder="e.g. first person, dry, looking back 30 years">
+        </div>
+        <div>
+          <label>Seconds per scene</label>
+          <input type="number" id="narrSecs" min="2" max="60" value="8">
+        </div>
+        <div style="align-self:flex-end">
+          <button class="btn ghost" id="narrBtn">Write narration</button>
+        </div>
+      </div>
+      <div class="muted" id="narrTotal" style="margin-top:8px"></div>
+    </div>
+
+    <div id="sceneList"></div>
+
+    <div class="panel">
+      <button class="btn" id="saveScenesBtn">Save edits</button>
+      <span class="muted" id="saveMsg" style="margin-left:10px"></span>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------- step 3 -->
+  <section id="step3" class="hidden">
+    <div class="panel">
+      <h2>Render</h2>
+      <p class="hint">Only scenes whose compiled prompt differs from the one stored in the manifest are
+        re-rendered. Timestamps are ignored.</p>
+      <div class="row">
+        <div style="flex:0 0 auto"><button class="btn ghost" id="planBtn">Preview cost</button></div>
+        <div style="flex:0 0 auto">
+          <label style="margin:0"><input type="checkbox" id="forceAll" style="width:auto"> re-render everything</label>
+        </div>
+        <div style="flex:0 0 auto"><button class="btn ghost" id="cancelBtn">Cancel run</button></div>
+      </div>
+      <div id="planOut"></div>
+    </div>
+    <div class="panel">
+      <h2>Gallery</h2>
+      <div class="grid" id="gallery"></div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------- step 4 -->
+  <section id="step4" class="hidden">
+    <div class="panel">
+      <h2>Export</h2>
+      <p class="hint">Copies the selected render of each scene into <code>export/</code> under
+        flattened, sort-safe names, writes the matching narration text files, and drops a copy of
+        <code>manifest.json</code> beside them.</p>
+      <label><input type="checkbox" id="flatten" checked style="width:auto">
+        flatten filenames (drop <code>_vNN</code> / <code>_seed</code>)</label>
+      <p></p>
+      <button class="btn" id="exportBtn">Write export folder</button>
+      <span class="muted" id="exportMsg" style="margin-left:10px"></span>
+      <div id="exportOut"></div>
+    </div>
+    <div class="panel">
+      <h2>Provenance</h2>
+      <p class="hint">One record per asset: engine, seed, params, and the exact prompt that was sent.</p>
+      <button class="btn ghost sm" id="manifestBtn">Show manifest.json</button>
+      <pre class="prompt hidden" id="manifestOut"></pre>
+    </div>
+  </section>
+</main>
+
+<div class="costbar" id="costbar">
+  <div><span class="muted">Batch</span> <span class="big" id="cbCount">0</span> <span class="muted">images</span></div>
+  <div><span class="muted">Estimated</span> <span class="big" id="cbCost">$0.00</span></div>
+  <div><span class="muted">Spent so far</span> <span class="big" id="cbSpent">$0.00</span></div>
+  <div class="spacer"></div>
+  <span class="muted" id="cbStatus"></span>
+  <button class="btn spend" id="renderBtn">Render — confirm spend</button>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let ENGINES = null, P = null, POLL = null;
+
+// ------------------------------------------------------------------ fetch
+async function api(path, method = "GET", body) {
+  const res = await fetch("/api" + path, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { detail: text }; }
+  if (!res.ok) throw new Error((data && data.detail) || res.statusText);
+  return data;
+}
+function alertBox(msg, kind = "err") {
+  $("alerts").innerHTML = `<div class="${kind}">${escapeHtml(String(msg))}</div>`;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+function clearAlerts() { $("alerts").innerHTML = ""; }
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function money(n) { return "$" + (Number(n) || 0).toFixed(2); }
+
+// ------------------------------------------------------------------ steps
+function goStep(n) {
+  document.querySelectorAll("nav.steps button[data-step]").forEach((b) =>
+    b.classList.toggle("active", b.dataset.step === String(n)));
+  [1, 2, 3, 4].forEach((i) => $("step" + i).classList.toggle("hidden", i !== n));
+  $("costbar").style.display = n === 3 ? "flex" : "none";
+  if (n === 3) refreshPlan();
+}
+document.querySelectorAll("nav.steps button[data-step]").forEach((b) =>
+  b.addEventListener("click", () => goStep(Number(b.dataset.step))));
+
+// ------------------------------------------------------------------ engines
+function renderEngines() {
+  const list = $("engineList");
+  list.innerHTML = "";
+  Object.values(ENGINES.engines).forEach((e) => {
+    const div = document.createElement("div");
+    div.className = "engine" + (P && P.engine === e.key ? " sel" : "");
+    div.innerHTML = `<b>${escapeHtml(e.name)} ${e.verified ? "" : "<span class='chip'>unverified</span>"}</b>
+      <span>${escapeHtml(e.provider)} · ${escapeHtml(e.strength)}</span>
+      <span>~${money(e.price_per_image)} / image</span>`;
+    div.onclick = async () => {
+      try { P = await api(`/projects/${P.id}`, "PATCH", { engine: e.key }); renderAll(); }
+      catch (err) { alertBox(err.message); }
+    };
+    list.appendChild(div);
+  });
+
+  const eng = ENGINES.engines[P.engine];
+  $("engineNotes").innerHTML = eng.dialect_notes.length
+    ? `<details><summary>${escapeHtml(eng.name)} dialect &amp; guardrails</summary>
+       <ul class="muted">${eng.dialect_notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul></details>`
+    : "";
+
+  const box = $("engineParams");
+  box.innerHTML = "";
+  eng.inputs.forEach((spec) => {
+    const val = P.params[spec.key];
+    const wrap = document.createElement("div");
+    let control;
+    if (spec.type === "enum") {
+      control = `<select data-param="${spec.key}">` +
+        spec.options.map((o) => `<option ${o === val ? "selected" : ""}>${escapeHtml(o)}</option>`).join("") +
+        `</select>`;
+    } else if (spec.type === "seed") {
+      control = `<input type="text" data-param="${spec.key}" value="${val ?? ""}" placeholder="random">`;
+    } else if (spec.type === "toggle") {
+      control = `<input type="checkbox" data-param="${spec.key}" ${val ? "checked" : ""} style="width:auto">`;
+    } else if (spec.type === "range") {
+      control = `<input type="number" data-param="${spec.key}" value="${val ?? ""}" min="${spec.min}" max="${spec.max}" step="${spec.step || 1}">`;
+    } else {
+      control = `<input type="text" data-param="${spec.key}" value="${escapeHtml(String(val ?? ""))}">`;
+    }
+    wrap.innerHTML = `<label>${escapeHtml(spec.label)}</label>${control}` +
+      (spec.help ? `<div class="muted" style="font-size:12px">${escapeHtml(spec.help)}</div>` : "");
+    box.appendChild(wrap);
+  });
+  box.querySelectorAll("[data-param]").forEach((el) => {
+    el.addEventListener("change", async () => {
+      const params = {};
+      box.querySelectorAll("[data-param]").forEach((c) => {
+        params[c.dataset.param] = c.type === "checkbox" ? c.checked : c.value;
+      });
+      try { P = await api(`/projects/${P.id}`, "PATCH", { params }); clearAlerts(); renderAll(); }
+      catch (err) { alertBox(err.message); }
+    });
+  });
+}
+
+// ------------------------------------------------------------------ scenes
+function renderScenes() {
+  $("styleProfile").value = P.style_profile || "";
+  const box = $("sceneList");
+  box.innerHTML = "";
+  if (!P.scenes.length) {
+    box.innerHTML = `<div class="panel muted">No scenes yet — run step 1.</div>`;
+    return;
+  }
+  P.scenes.forEach((s) => {
+    const el = document.createElement("div");
+    el.className = "scene";
+    const status = s.dirty ? "dirty" : (s.status || "pending");
+    const label = s.dirty ? "prompt changed" : (s.status || "pending");
+    el.innerHTML = `
+      <header>
+        <span class="ord">${String(s.n).padStart(3, "0")}</span>
+        <input type="text" data-scene="${s.n}" data-field="title" value="${escapeHtml(s.title || "")}">
+        <span class="status ${status}">${escapeHtml(label)}</span>
+      </header>
+      <label>Prompt body <span class="counter">${s.prompt_chars} chars compiled</span></label>
+      <textarea class="mono" rows="4" data-scene="${s.n}" data-field="body">${escapeHtml(s.body || "")}</textarea>
+      <label>Narration <span class="counter">${s.narration_words} words ≈ ${s.narration_seconds}s</span></label>
+      <textarea rows="2" data-scene="${s.n}" data-field="narration">${escapeHtml(s.narration || "")}</textarea>
+      <details><summary>Compiled prompt (what gets sent)</summary>
+        <pre class="prompt">${escapeHtml(s.compiled_prompt)}</pre></details>`;
+    box.appendChild(el);
+  });
+  const words = P.scenes.reduce((a, s) => a + s.narration_words, 0);
+  $("narrTotal").textContent = words
+    ? `${words} words across ${P.scenes.length} scenes ≈ ${(words / 150 * 60).toFixed(0)}s of read-aloud time.`
+    : "";
+}
+
+function collectScenePatch() {
+  const map = {};
+  document.querySelectorAll("[data-scene]").forEach((el) => {
+    const n = Number(el.dataset.scene);
+    map[n] = map[n] || { n };
+    map[n][el.dataset.field] = el.value;
+  });
+  return Object.values(map);
+}
+
+// ------------------------------------------------------------------ gallery
+function renderGallery() {
+  const g = $("gallery");
+  g.innerHTML = "";
+  P.scenes.forEach((s) => {
+    const card = document.createElement("div");
+    card.className = "card";
+    const img = s.asset
+      ? `<img src="/api/projects/${P.id}/image/${encodeURIComponent(s.asset)}?v=${encodeURIComponent(s.asset)}" alt="">`
+      : `<div class="ph">${escapeHtml(s.status === "rendering" || s.status === "queued" ? (s.detail || s.status) : "not rendered")}</div>`;
+    const status = s.dirty ? "dirty" : (s.status || "pending");
+    card.innerHTML = `${img}
+      <div class="meta">
+        <b>${String(s.n).padStart(3, "0")} · ${escapeHtml(s.title || "")}</b>
+        <span class="status ${status}">${escapeHtml(s.dirty ? "prompt changed" : (s.detail || s.status || "pending"))}</span>
+        <div style="margin-top:8px"><button class="btn ghost sm" data-render="${s.n}">Render this scene</button></div>
+      </div>`;
+    g.appendChild(card);
+  });
+  g.querySelectorAll("[data-render]").forEach((b) => {
+    b.onclick = () => doRender([Number(b.dataset.render)], true);
+  });
+}
+
+// ------------------------------------------------------------------ plan / render
+async function refreshPlan() {
+  if (!P || !P.scenes.length) return;
+  try {
+    const plan = await api(`/projects/${P.id}/plan`, "POST", { force: $("forceAll").checked });
+    $("cbCount").textContent = plan.count;
+    $("cbCost").textContent = money(plan.estimate);
+    $("cbSpent").textContent = money((P.spend && P.spend.actual) || 0);
+    $("renderBtn").disabled = plan.count === 0 || !P.keys.renderful;
+
+    let html = "";
+    if (!P.keys.renderful)
+      html += `<div class="err">No Renderful API key found. Set RENDERFUL_API_KEY or put the key in api_key.txt, then restart.</div>`;
+    if (!plan.verified_engine)
+      html += `<div class="warn">This engine is marked unverified in engines.json. Render one scene before committing to a batch.</div>`;
+    plan.warnings.forEach((w) => { html += `<div class="warn">${escapeHtml(w)}</div>`; });
+    html += `<div class="note">${plan.count} to render, ${plan.skip.length} already current.
+      Estimated ${money(plan.estimate)} at ${money(plan.price_per_image)}/image.
+      ${escapeHtml(plan.price_note || "")}</div>`;
+    if (plan.render.length) {
+      html += `<table><tr><th>#</th><th>Scene</th><th>Why</th></tr>` +
+        plan.render.map((r) => `<tr><td>${r.n}</td><td>${escapeHtml(r.title)}</td><td class="muted">${escapeHtml(r.reason)}</td></tr>`).join("") +
+        `</table>`;
+    }
+    $("planOut").innerHTML = html;
+  } catch (err) { $("planOut").innerHTML = `<div class="err">${escapeHtml(err.message)}</div>`; }
+}
+
+async function doRender(scenes, force) {
+  const n = scenes ? scenes.length : Number($("cbCount").textContent);
+  const cost = scenes ? "" : ` (about ${$("cbCost").textContent})`;
+  if (!confirm(`Send ${n} image request${n === 1 ? "" : "s"} to Renderful${cost}?\n\nThis spends real credit.`)) return;
+  try {
+    clearAlerts();
+    const res = await api(`/projects/${P.id}/render`, "POST",
+      { scenes: scenes || null, force: force ?? $("forceAll").checked, confirm: true });
+    if (!res.started) alertBox(res.message, "note");
+    startPolling();
+  } catch (err) { alertBox(err.message); }
+}
+
+function startPolling() {
+  if (POLL) clearInterval(POLL);
+  POLL = setInterval(async () => {
+    try {
+      P = await api(`/projects/${P.id}`);
+      renderScenes(); renderGallery();
+      const job = P.job;
+      $("cbSpent").textContent = money((P.spend && P.spend.actual) || 0);
+      if (job && job.running) {
+        const busy = P.scenes.filter((s) => s.status === "rendering" || s.status === "queued").length;
+        $("cbStatus").textContent = `rendering — ${busy} in flight`;
+      } else {
+        $("cbStatus").textContent = "";
+        clearInterval(POLL); POLL = null;
+        if (job && job.fatal) alertBox(
+          "The run stopped early: " + job.fatal +
+          "\n\nRenderful is out of credit or rate limiting the account. Add funds, then render again — " +
+          "scenes that already downloaded are skipped automatically.");
+        refreshPlan();
+      }
+    } catch (err) { clearInterval(POLL); POLL = null; alertBox(err.message); }
+  }, 2500);
+}
+
+// ------------------------------------------------------------------ load
+function renderAll() {
+  $("projName").value = P.name || "";
+  $("story").value = P.story || "";
+  $("styleHint").value = P.style_hint || "";
+  $("sceneCount").value = P.scene_count || 12;
+  $("narrVoice").value = (P.narration && P.narration.voice) || "";
+  $("narrSecs").value = (P.narration && P.narration.seconds_per_scene) || 8;
+  updateStoryCount();
+  renderEngines(); renderScenes(); renderGallery();
+  $("cbSpent").textContent = money((P.spend && P.spend.actual) || 0);
+  if (P.job && P.job.running && !POLL) startPolling();
+}
+
+function updateStoryCount() {
+  const n = $("story").value.length;
+  const el = $("storyCount");
+  el.textContent = `${n} / 5000`;
+  el.classList.toggle("over", n > 5000);
+}
+
+async function loadProjects(selectId) {
+  const list = await api("/projects");
+  const sel = $("projectPicker");
+  sel.innerHTML = list.map((p) =>
+    `<option value="${p.id}">${escapeHtml(p.name)} — ${p.rendered}/${p.scenes}</option>`).join("");
+  if (!list.length) return false;
+  sel.value = selectId && list.some((p) => p.id === selectId) ? selectId : list[0].id;
+  P = await api(`/projects/${sel.value}`);
+  renderAll();
+  return true;
+}
+
+async function boot() {
+  ENGINES = await api("/engines");
+  const status = await api("/status");
+  $("keyRenderful").textContent = "Renderful key " + (status.keys.renderful ? "found" : "missing");
+  $("keyRenderful").className = "chip " + (status.keys.renderful ? "ok" : "bad");
+  const warn = status.keys.anthropic_warning;
+  $("keyAnthropic").textContent =
+    "Claude key " + (warn ? "malformed" : status.keys.anthropic ? "found" : "missing");
+  $("keyAnthropic").className = "chip " + (status.keys.anthropic && !warn ? "ok" : "bad");
+  if (warn) $("keyAnthropic").title = warn;
+  const have = await loadProjects();
+  if (!have) await newProject();
+  goStep(1);
+  if (warn) alertBox(warn, "warn");
+  else if (!status.keys.anthropic)
+    alertBox("No Anthropic key found — segmentation and narration are disabled. " +
+             "Set ANTHROPIC_API_KEY or put the key in anthropic_key.txt, then restart.", "warn");
+}
+
+async function newProject() {
+  const name = prompt("Project name", "Untitled story");
+  if (name === null) return;
+  P = await api("/projects", "POST", { name: name || "Untitled story" });
+  await loadProjects(P.id);
+  goStep(1);
+}
+
+// ------------------------------------------------------------------ wiring
+$("story").addEventListener("input", updateStoryCount);
+$("projectPicker").addEventListener("change", (e) => loadProjects(e.target.value));
+$("newProjectBtn").onclick = () => newProject().catch((e) => alertBox(e.message));
+$("deleteProjectBtn").onclick = async () => {
+  if (!confirm(`Delete "${P.name}" and everything in its folder?`)) return;
+  try { await api(`/projects/${P.id}`, "DELETE"); if (!await loadProjects()) await newProject(); }
+  catch (err) { alertBox(err.message); }
+};
+
+$("segmentBtn").onclick = async () => {
+  clearAlerts();
+  const btn = $("segmentBtn"); btn.disabled = true; $("segmentMsg").textContent = "Claude is reading the story…";
+  try {
+    P = await api(`/projects/${P.id}`, "PATCH", {
+      name: $("projName").value, story: $("story").value,
+      style_hint: $("styleHint").value, scene_count: Number($("sceneCount").value),
+    });
+    P = await api(`/projects/${P.id}/segment`, "POST", {
+      scene_count: Number($("sceneCount").value), style_hint: $("styleHint").value,
+    });
+    renderAll(); goStep(2); $("segmentMsg").textContent = "";
+  } catch (err) { alertBox(err.message); $("segmentMsg").textContent = ""; }
+  finally { btn.disabled = false; }
+};
+
+$("saveScenesBtn").onclick = async () => {
+  clearAlerts();
+  try {
+    P = await api(`/projects/${P.id}`, "PATCH", {
+      style_profile: $("styleProfile").value, scenes: collectScenePatch(),
+    });
+    renderAll();
+    $("saveMsg").textContent = "saved";
+    setTimeout(() => ($("saveMsg").textContent = ""), 2000);
+  } catch (err) { alertBox(err.message); }
+};
+
+$("narrBtn").onclick = async () => {
+  clearAlerts();
+  const btn = $("narrBtn"); btn.disabled = true; btn.textContent = "Writing…";
+  try {
+    P = await api(`/projects/${P.id}`, "PATCH", { scenes: collectScenePatch(), style_profile: $("styleProfile").value });
+    P = await api(`/projects/${P.id}/narration`, "POST", {
+      voice: $("narrVoice").value, seconds_per_scene: Number($("narrSecs").value),
+    });
+    renderAll();
+  } catch (err) { alertBox(err.message); }
+  finally { btn.disabled = false; btn.textContent = "Write narration"; }
+};
+
+$("planBtn").onclick = refreshPlan;
+$("forceAll").addEventListener("change", refreshPlan);
+$("renderBtn").onclick = () => doRender(null);
+$("cancelBtn").onclick = async () => {
+  try { const r = await api(`/projects/${P.id}/cancel`, "POST");
+        alertBox(r.cancelling ? "Cancelling — in-flight images finish first." : "Nothing is running.", "note"); }
+  catch (err) { alertBox(err.message); }
+};
+
+$("exportBtn").onclick = async () => {
+  clearAlerts();
+  try {
+    const res = await api(`/projects/${P.id}/export`, "POST", { flatten: $("flatten").checked });
+    $("exportMsg").textContent = `${res.files.length} image(s) written`;
+    $("exportOut").innerHTML = `<div class="note">Wrote to <code>${escapeHtml(res.dir)}</code></div>` +
+      `<table><tr><th>#</th><th>Image</th><th>Narration</th></tr>` +
+      res.files.map((f) => `<tr><td>${f.scene}</td><td><code>${escapeHtml(f.image)}</code></td>
+        <td><code>${escapeHtml(f.narration || "—")}</code></td></tr>`).join("") + `</table>`;
+  } catch (err) { alertBox(err.message); }
+};
+
+$("manifestBtn").onclick = async () => {
+  try {
+    const m = await api(`/projects/${P.id}/manifest`);
+    const out = $("manifestOut");
+    out.classList.remove("hidden");
+    out.textContent = JSON.stringify(m, null, 2);
+  } catch (err) { alertBox(err.message); }
+};
+
+boot().catch((e) => alertBox("Could not start: " + e.message));
+</script>
+</body>
+</html>

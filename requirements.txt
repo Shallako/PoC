@@ -1,0 +1,5 @@
+fastapi>=0.115
+uvicorn>=0.30
+anthropic>=0.69
+# Optional: only needed if you want re-encoded PNGs instead of the delivered JPEG.
+# pillow>=10
