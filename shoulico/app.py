@@ -10,11 +10,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
-from . import (compiler, config, engines, i18n, narration as narration_mod, orchestrator,
-               store)
+from . import (captions, compiler, config, engines, i18n,
+               narration as narration_mod, orchestrator, store, timeline, video)
 
 app = FastAPI(title="Shoulico (local MVP)", docs_url="/api/docs", redoc_url=None)
 
@@ -80,6 +80,13 @@ class VoiceRequest(BaseModel):
 
 class SpeakRequest(PlanRequest):
     confirm: bool = False
+
+
+class VideoRequest(BaseModel):
+    """How the finished cut is assembled. Local work, so nothing here spends."""
+
+    profile: str | None = None
+    params: dict | None = None
 
 
 class ExportRequest(BaseModel):
@@ -174,6 +181,7 @@ def _decorate(project: dict) -> dict:
             pass
     out["job"] = orchestrator.status(project["id"])
     out["audio_job"] = orchestrator.status(project["id"], orchestrator.KIND_AUDIO)
+    out["video_job"] = orchestrator.status(project["id"], orchestrator.KIND_VIDEO)
     # Runtime of the finished voice-over: measured where audio exists, estimated
     # where it does not, so the number is honest about which it is.
     out["audio_seconds_total"] = round(
@@ -591,6 +599,88 @@ def api_audio(pid: str, name: str):
     if not path.is_file():
         raise HTTPException(404, "No such audio")
     return FileResponse(path)
+
+
+# --------------------------------------------------------------------------- #
+# Step 5: video assembly
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/video-profiles")
+def api_video_profiles() -> dict:
+    return engines.public_video()
+
+
+@app.post("/api/projects/{pid}/video/settings")
+def api_video_settings(pid: str, body: VideoRequest) -> dict:
+    project = _load(pid)
+    stored = {**(project.get("video") or {})}
+    profile = body.profile or stored.get("profile") or engines.default_video_key()
+    try:
+        params = engines.validate(
+            profile,
+            body.params if body.params is not None else stored.get("params"),
+            engines.SECTION_VIDEO,
+        )
+    except engines.ParamError as e:
+        raise HTTPException(400, str(e)) from None
+
+    def apply(proj):
+        proj["video"] = {**(proj.get("video") or {}), "profile": profile,
+                         "params": params}
+    return _decorate(store.mutate(pid, apply))
+
+
+@app.post("/api/projects/{pid}/video/plan")
+def api_plan_video(pid: str) -> dict:
+    try:
+        return orchestrator.plan_video(_load(pid))
+    except engines.ParamError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.post("/api/projects/{pid}/video/assemble")
+def api_assemble(pid: str) -> dict:
+    """No confirmation gate: assembly runs locally and spends nothing."""
+    _load(pid)
+    try:
+        return orchestrator.start_video(pid)
+    except engines.ParamError as e:
+        raise HTTPException(400, str(e)) from None
+    except RuntimeError as e:
+        # A missing ffmpeg is a precondition the user can fix, not a server fault.
+        code = 409 if video.available() else 424
+        raise HTTPException(code, str(e)) from None
+
+
+@app.post("/api/projects/{pid}/video/cancel")
+def api_cancel_video(pid: str) -> dict:
+    _load(pid)
+    return {"cancelling": orchestrator.cancel(pid, orchestrator.KIND_VIDEO)}
+
+
+@app.get("/api/projects/{pid}/video/{name}")
+def api_video_file(pid: str, name: str):
+    _load(pid)
+    safe = Path(name).name
+    path = store.video_dir(pid) / safe
+    if not path.is_file():
+        raise HTTPException(404, "No such video")
+    return FileResponse(path)
+
+
+@app.get("/api/projects/{pid}/captions.{fmt}")
+def api_captions(pid: str, fmt: str):
+    """The captions on their own, without waiting for an export or an encode."""
+    if fmt not in ("srt", "vtt"):
+        raise HTTPException(404, "Captions come as srt or vtt")
+    project = _load(pid)
+    beats, _ = timeline.build(project, store.video_settings(project))
+    cues = captions.build(beats)
+    if not cues:
+        raise HTTPException(404, "No narration to caption yet")
+    body = captions.to_srt(cues) if fmt == "srt" else captions.to_vtt(cues)
+    return PlainTextResponse(body, media_type=(
+        "application/x-subrip" if fmt == "srt" else "text/vtt"))
 
 
 # --------------------------------------------------------------------------- #

@@ -11,13 +11,16 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import compiler, config, engines, narration, renderful, store, tts
-from .naming import asset_stem, audio_stem
+from . import (captions, compiler, config, engines, narration, renderful, store,
+               timeline, tts, video)
+from .naming import asset_stem, audio_stem, flat_stem, video_stem
 
-# Images and narration audio are separate runs over the same project, so they get
-# separate job slots: cancelling a voice batch must not stop a render.
+# Images, narration audio and the video cut are separate runs over the same
+# project, so they get separate job slots: cancelling a voice batch must not stop
+# a render, and assembling a cut must not stop either.
 KIND_RENDER = "render"
 KIND_AUDIO = "audio"
+KIND_VIDEO = "video"
 
 
 class Job:
@@ -543,6 +546,161 @@ def start_audio(pid: str, scene_numbers: list[int] | None = None,
         target=_run_audio,
         args=(job, key, the_plan["voice_engine"], the_plan["model"], the_plan["params"]),
         name=f"audio-{pid}", daemon=True,
+    )
+    job.thread.start()
+    return {"started": True, "plan": the_plan, "job": job.as_dict()}
+
+
+# --------------------------------------------------------------------------- #
+# Video assembly
+# --------------------------------------------------------------------------- #
+
+def plan_video(project: dict) -> dict:
+    """The cut this project would produce, without producing it.
+
+    Costs nothing to ask, so unlike the render and speak plans there is no spend
+    to confirm -- what this preview is for is telling you the runtime is a guess
+    before you sit through an encode of one.
+    """
+    settings = store.video_settings(project)
+    beats, skipped = timeline.build(project, settings)
+    cues = captions.build(beats)
+    width, height = timeline.canvas(project, settings["aspect"])
+
+    return {
+        "profile": (project.get("video") or {}).get("profile")
+                   or engines.default_video_key(),
+        "params": settings,
+        "scenes": [
+            {"n": b.n, "title": b.title, "start": b.start, "duration": b.duration,
+             "speech_seconds": b.speech_seconds, "measured": b.measured,
+             "has_audio": b.audio is not None}
+            for b in beats
+        ],
+        "skip": skipped,
+        "count": len(beats),
+        "cues": len(cues),
+        "width": width,
+        "height": height,
+        "runtime_seconds": timeline.total_seconds(beats),
+        "runtime_measured": timeline.all_measured(beats),
+        "silent_scenes": sum(1 for b in beats if b.audio is None),
+        "ffmpeg": {"available": video.available(), "version": video.version(),
+                   "hint": video.install_hint()},
+    }
+
+
+def _assemble(job: Job, project: dict, settings: dict) -> None:
+    """Encode one segment per scene, join them, then attach the captions."""
+    pid = job.pid
+    vdir = store.video_dir(pid)
+    vdir.mkdir(parents=True, exist_ok=True)
+
+    beats, _ = timeline.build(project, settings)
+    width, height = timeline.canvas(project, settings["aspect"])
+    fps = int(settings["fps"])
+
+    segments: list[Path] = []
+    for beat in beats:
+        if job.stop.is_set():
+            _set_scene(pid, beat.n, video_status="pending",
+                       video_detail="cancelled before encoding")
+            continue
+        _set_scene(pid, beat.n, video_status="encoding", video_detail="")
+        dest = vdir / f"{flat_stem(pid, beat.n, beat.slug)}_seg{store.VIDEO_SUFFIX}"
+        try:
+            video.encode_segment(
+                beat, dest, width=width, height=height, fps=fps,
+                motion=settings["motion"], lead_in=float(settings["lead_in"]),
+            )
+        except video.FfmpegMissing as e:
+            job.stop.set()
+            job.fatal = str(e)
+            _set_scene(pid, beat.n, video_status="failed", video_detail=str(e))
+            return
+        except Exception as e:  # noqa: BLE001 - one scene's problem
+            _set_scene(pid, beat.n, video_status="failed", video_detail=str(e))
+            continue
+        segments.append(dest)
+        _set_scene(pid, beat.n, video_status="done", video_detail="",
+                   video_segment=dest.name, video_seconds=beat.duration)
+
+    if job.stop.is_set() or not segments:
+        job.fatal = job.fatal or "no scene segments were produced"
+        return
+
+    joined = vdir / f"{video_stem(pid)}_joined{store.VIDEO_SUFFIX}"
+    final = vdir / f"{video_stem(pid)}{store.VIDEO_SUFFIX}"
+    video.join(segments, joined, workdir=vdir)
+
+    mode = settings["subtitles"]
+    cues = captions.build(beats)
+    if mode != video.SUBTITLES_NONE and cues:
+        srt = vdir / f"{video_stem(pid)}{store.CAPTIONS_SUFFIX}"
+        srt.write_text(captions.to_srt(cues), encoding="utf-8")
+        video.add_subtitles(joined, srt, final, mode=mode, workdir=vdir, fps=fps)
+        joined.unlink(missing_ok=True)
+    else:
+        joined.replace(final)
+
+    def apply(proj):
+        proj["video"] = {
+            **(proj.get("video") or {}),
+            "file": final.name,
+            "seconds": timeline.total_seconds(beats),
+            "measured": timeline.all_measured(beats),
+            "width": width, "height": height, "fps": fps,
+            "assembled_at": store.now(),
+        }
+    store.mutate(pid, apply)
+
+
+def _run_video(job: Job, project: dict, settings: dict) -> None:
+    try:
+        _assemble(job, project, settings)
+    except Exception as e:  # noqa: BLE001 - reported on the job, not swallowed
+        job.fatal = str(e)
+    finally:
+        job.finished_at = store.now()
+        def apply(proj):
+            for scene in proj["scenes"]:
+                if (scene["n"] in job.scenes
+                        and scene.get("video_status") in ("queued", "encoding")):
+                    scene["video_status"] = "pending"
+                    scene["video_detail"] = job.fatal or "stopped"
+        store.mutate(job.pid, apply)
+
+
+def start_video(pid: str) -> dict:
+    """Assemble the cut. Local and free, so there is nothing to confirm."""
+    existing = job_for(pid, KIND_VIDEO)
+    if existing and existing.running:
+        raise RuntimeError("A video assembly is already going for this project.")
+
+    project = store.load(pid)
+    if not video.available():
+        raise RuntimeError(video.install_hint())
+
+    the_plan = plan_video(project)
+    if not the_plan["scenes"]:
+        return {"started": False, "plan": the_plan,
+                "message": "Nothing to assemble - no scene has a rendered image yet."}
+
+    numbers = [row["n"] for row in the_plan["scenes"]]
+
+    def apply(proj):
+        for scene in proj["scenes"]:
+            if scene["n"] in numbers:
+                scene["video_status"] = "queued"
+                scene["video_detail"] = "waiting to encode"
+    store.mutate(pid, apply)
+
+    job = Job(pid, numbers, KIND_VIDEO)
+    with _jobs_guard:
+        _jobs[_slot(pid, KIND_VIDEO)] = job
+    job.thread = threading.Thread(
+        target=_run_video, args=(job, project, the_plan["params"]),
+        name=f"video-{pid}", daemon=True,
     )
     job.thread.start()
     return {"started": True, "plan": the_plan, "job": job.as_dict()}

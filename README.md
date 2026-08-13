@@ -145,9 +145,16 @@ spend money.
    /api/projects/{id}/narration/speak` without `confirm: true` is a 400. One MP3
    per scene under the image's own stem, a player and the measured duration
    beside each line, and per-line "Speak" buttons for one-offs.
-5. **Export** -- flattened, sort-safe copies plus matching narration files and
-   audio, the full voiceover, and a copy of `manifest.json`. `flatten: false`
-   keeps the versioned filenames instead. `export/` is cleared first, so it never
+5. **Video** -- cut the finished MP4 on this machine with ffmpeg. Each scene holds
+   the screen for exactly as long as its narration audio runs, with an optional
+   Ken Burns zoom, and captions built from the same timeline. Nothing is uploaded
+   and nothing is billed, so unlike rendering and speaking there is no
+   confirmation gate. ffmpeg is optional: without it the panel says so and offers
+   the install command, and captions still export.
+6. **Export** -- flattened, sort-safe copies plus matching narration files and
+   audio, the full voiceover, an `.srt`, a `.vtt`, a timing sheet, the assembled
+   video if there is one, and a copy of `manifest.json`. `flatten: false` keeps
+   the versioned filenames instead. `export/` is cleared first, so it never
    carries files from a previous run.
 
 ## What lands on disk
@@ -159,11 +166,36 @@ projects/<project-id>/
   images/          <project>_<NNN>_<slug>_v<VV>[_seed<SEED>].<jpg|png>
   narration/       <project>_<NNN>_<slug>.txt   and  <project>_full-voiceover.txt
   audio/           <project>_<NNN>_<slug>.mp3   -- the spoken line, same stem
+  video/           <project>_<NNN>_<slug>_seg.mp4  -- one segment per scene
+                   <project>_video.mp4              -- the finished cut
   export/          flattened <project>_<NNN>_<slug>.<jpg|png> + .txt + .mp3
-                   + <project>_full-voiceover.txt + manifest.json
-engines.json       the engine and voice registries -- edit to add a model
+                   + <project>_full-voiceover.txt + <project>_captions.srt/.vtt
+                   + <project>_timing.csv + <project>_video.mp4 + manifest.json
+engines.json       engine, voice and video registries -- edit to add a model
 i18n/<code>.json   cached interface translations, one file per language
 ```
+
+## Getting to a finished video
+
+The three ways out of `export/`, cheapest first:
+
+| Route | Cost per 12-scene story | Needs |
+|---|---|---|
+| Captions + timing sheet into CapCut | **$0.00** | nothing |
+| Assemble the MP4 here (step 5) | **$0.00** | ffmpeg installed |
+| Generated video clips per scene | $1.80 -- $3.60 | not built; see below |
+
+`<project>_timing.csv` is the hand-off: one row per scene with its start, its
+duration, whether that duration was measured or estimated, and the exact
+narration text. An editor can place the whole cut from it without dragging a
+single clip against a waveform.
+
+Generated image-to-video clips are deliberately **not** built. Renderful is a
+generation API, not an editing one: it returns N separate silent clips with no
+narration and no way to join them, so buying motion does not remove the assembly
+step, it adds cost on top of it. The cheapest usable model is 2--4x the entire
+cost of the images and narration combined, and its clips are a fixed ~5s against
+narration lines that commonly run 5--15s. A still holds any length for free.
 
 ---
 
@@ -346,13 +378,10 @@ auth, sharing links. Multi-user concerns from the PRD (Postgres, Redis, S3, KMS,
 spend caps at an orchestrator) collapse here to: the filesystem, `manifest.json`,
 a thread pool, and a confirmation dialog.
 
-Captions are the obvious next thing: measured durations make an SRT arithmetic
-rather than guesswork.
-
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 98 offline tests, free
+    .venv\Scripts\python -m pytest             # 137 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 The offline suite drives the real FastAPI app against a fake Renderful HTTP
@@ -361,6 +390,12 @@ server on loopback and a fake Anthropic client, so the retry ladder, poll loop,
 non-loopback request into a failure, so it can never spend. The fake serves a
 genuine MPEG frame stream for speech jobs, so the duration parser is measured
 against real bytes rather than a stub.
+
+Video assembly is faked at `subprocess.run`, not at the module boundary, so
+every filtergraph and codec flag is constructed for real and asserted on. What
+that cannot prove is that ffmpeg *accepts* the command line, so the one test
+making that claim is marked `needs_ffmpeg` and skips unless a real one is
+installed. It encodes locally and spends nothing, so it is not a `live` test.
 
 The live suite talks to the real Renderful and Anthropic accounts. It is skipped
 unless you pass --live, renders one 1K image (SHOULICO_LIVE_IMAGE_BUDGET, default

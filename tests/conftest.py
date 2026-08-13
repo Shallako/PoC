@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from shoulico import compiler, config, engines, orchestrator, renderful, store  # noqa: E402
 from shoulico.app import app  # noqa: E402
 
+import fake_ffmpeg  # noqa: E402
 from fake_claude import FakeClaude  # noqa: E402
 from fake_renderful import FakeRenderful  # noqa: E402
 
@@ -125,6 +126,13 @@ def claude(monkeypatch):
 
 
 @pytest.fixture
+def ffmpeg(monkeypatch):
+    """A fake ffmpeg. Without this fixture the suite behaves as if none is installed."""
+    from shoulico import video
+    return fake_ffmpeg.install(monkeypatch, video)
+
+
+@pytest.fixture
 def api(monkeypatch):
     fake = FakeRenderful().start()
     monkeypatch.setattr(renderful, "RENDERFUL_API_BASE", fake.base)
@@ -159,6 +167,13 @@ def render(client, pid, **body) -> dict:
 def speak(client, pid, **body) -> dict:
     r = client.post(f"/api/projects/{pid}/narration/speak",
                     json={"confirm": True, **body})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def assemble(client, pid) -> dict:
+    """Assembly spends nothing, so unlike render and speak there is no confirm."""
+    r = client.post(f"/api/projects/{pid}/video/assemble")
     assert r.status_code == 200, r.text
     return r.json()
 

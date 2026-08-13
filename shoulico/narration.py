@@ -110,12 +110,27 @@ def word_count(text: str) -> int:
     return len((text or "").split())
 
 
+# A line is only "unspaced" once there is enough CJK to be sure: a single kanji
+# quoted inside an English sentence must not switch the whole line to characters.
+_UNSPACED_MIN_CJK = 8
+
+
+def unspaced(text: str) -> bool:
+    """True for scripts that do not put spaces between words (Chinese, Japanese).
+
+    Captions and duration estimates both need this: you cannot break such a line
+    on whitespace, and you cannot count its words.
+    """
+    cjk = len(_CJK.findall(text or ""))
+    return cjk >= _UNSPACED_MIN_CJK and cjk >= word_count(text)
+
+
 def measure(text: str) -> tuple[int, str, float]:
     """(count, unit, seconds). Chinese and Japanese do not space their words, so a
     word count there reads as 1 for a whole line; those are measured in characters."""
     text = text or ""
-    cjk = len(_CJK.findall(text))
-    if cjk >= 8 and cjk >= word_count(text):
+    if unspaced(text):
+        cjk = len(_CJK.findall(text))
         return cjk, "characters", round(cjk / config.NARRATION_CPM * 60, 1)
     words = word_count(text)
     return words, "words", round(words / config.NARRATION_WPM * 60, 1)

@@ -53,6 +53,67 @@ AUDIO_POLL_TIMEOUT = 300
 AUDIO_POLL_SECONDS = 2
 
 
+# --------------------------------------------------------------------------- #
+# Captions
+# --------------------------------------------------------------------------- #
+
+# Subtitle conventions, not invented numbers. 42 characters per line and two
+# lines is the widely used broadcast/streaming ceiling (Netflix 42, BBC ~37-40);
+# 5/6 of a second is the standard minimum a cue may hold the screen, and seven
+# seconds the maximum before a reader has finished and is waiting.
+CAPTION_MAX_CHARS_PER_LINE = 42
+CAPTION_MAX_LINES = 2
+CAPTION_MIN_SECONDS = 5 / 6
+CAPTION_MAX_SECONDS = 7.0
+# Consecutive cues that share a frame boundary look like one flickering cue.
+CAPTION_GAP_SECONDS = 0.08
+
+# --------------------------------------------------------------------------- #
+# Video assembly (local ffmpeg)
+# --------------------------------------------------------------------------- #
+
+# Overridable because Windows installs land ffmpeg anywhere; PATH is only the
+# common case, never an assumption.
+FFMPEG_BINARY = os.environ.get("SHOULICO_FFMPEG") or "ffmpeg"
+# A long story is a long encode, and a still-image encode is not fast. This is a
+# ceiling on one scene, not on the whole assembly.
+FFMPEG_SEGMENT_TIMEOUT = 900
+FFMPEG_JOIN_TIMEOUT = 1800
+
+DEFAULT_VIDEO_PROFILE = "ffmpeg"
+DEFAULT_VIDEO_ASPECT = "16:9"
+# "source" follows whatever aspect ratio the images were actually rendered at,
+# so a 9:16 story does not get letterboxed into a 16:9 frame by default.
+VIDEO_ASPECT_SOURCE = "source"
+VIDEO_CANVASES = {
+    "16:9": (1920, 1080),
+    "9:16": (1080, 1920),
+    "1:1": (1080, 1080),
+    "4:3": (1440, 1080),
+    "3:4": (1080, 1440),
+}
+
+# A cut landing on the last syllable sounds clipped, and a line starting on the
+# first frame of a new picture reads as a mistake. These are the breathing room.
+VIDEO_LEAD_IN_SECONDS = 0.35
+VIDEO_TAIL_SECONDS = 0.65
+# A scene has to hold long enough to be seen even when its line is two words.
+VIDEO_MIN_SCENE_SECONDS = 1.5
+
+# Ken Burns. zoompan reads its x/y in whole input pixels, so a still at output
+# size visibly steps; sampling from a larger intermediate is what makes the move
+# smooth. Two is the point where it stops being visible and before memory hurts.
+VIDEO_KEN_BURNS_SUPERSAMPLE = 2
+VIDEO_KEN_BURNS_ZOOM = 1.12
+
+VIDEO_FPS = 30
+VIDEO_CRF = 20
+VIDEO_PRESET = "medium"
+VIDEO_AUDIO_BITRATE = "192k"
+VIDEO_AUDIO_RATE = 48000
+VIDEO_AUDIO_CHANNELS = 2
+
+
 def _from_file(*candidates: Path) -> str | None:
     for path in candidates:
         try:
