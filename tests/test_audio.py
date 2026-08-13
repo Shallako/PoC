@@ -303,6 +303,35 @@ def test_a_blank_language_code_follows_the_story(client, claude, api):
 
 
 # --------------------------------------------------------------------- #
+# The page
+# --------------------------------------------------------------------- #
+
+def test_the_page_carries_the_voice_controls(client):
+    """The UI is one static file, so a dropped control fails silently in a browser.
+
+    This does not execute the script; it guards the contract between the page and
+    the endpoints it calls.
+    """
+    html = client.get("/").text
+
+    for element_id in ("voiceList", "voiceParams", "ttsPlan", "speakBtn",
+                       "forceSpeak", "cancelSpeakBtn", "ttsStatus"):
+        assert f'id="{element_id}"' in html, element_id
+
+    assert "/narration/plan-audio" in html
+    assert "/narration/speak" in html
+    assert "/narration/cancel-audio" in html
+    assert "/api/voices" in html or '"/voices"' in html
+
+    # The speak button must not be wired through data-scene: collectScenePatch()
+    # sweeps those into the save payload and a button has no field to give it.
+    assert "data-speak=" in html
+
+    # The panel that used to promise no synthesis would now be a lie.
+    assert "Script only — no synthesis" not in html
+
+
+# --------------------------------------------------------------------- #
 # Export
 # --------------------------------------------------------------------- #
 

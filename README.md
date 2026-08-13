@@ -140,10 +140,11 @@ spend money.
    Three workers, live per-scene status, per-scene re-render from the gallery (the
    `?` beside that button says what it spends), and `POST .../cancel` stops the run
    and returns unfinished scenes to pending.
-4. **Speak** -- preview the character count and its cost, then confirm. Same
-   contract as rendering: `POST /api/projects/{id}/narration/speak` without
-   `confirm: true` is a 400. One MP3 per scene under the image's own stem, and the
-   measured duration is stored against the scene.
+4. **Speak** -- pick a voice on step 2, preview the character count and its cost,
+   then confirm. Same contract as rendering: `POST
+   /api/projects/{id}/narration/speak` without `confirm: true` is a 400. One MP3
+   per scene under the image's own stem, a player and the measured duration
+   beside each line, and per-line "Speak" buttons for one-offs.
 5. **Export** -- flattened, sort-safe copies plus matching narration files and
    audio, the full voiceover, and a copy of `manifest.json`. `flatten: false`
    keeps the versioned filenames instead. `export/` is cleared first, so it never
@@ -327,9 +328,8 @@ auth, sharing links. Multi-user concerns from the PRD (Postgres, Redis, S3, KMS,
 spend caps at an orchestrator) collapse here to: the filesystem, `manifest.json`,
 a thread pool, and a confirmation dialog.
 
-Narration audio has no UI yet: it is API-only (`/narration/plan-audio`,
-`/narration/voice`, `/narration/speak`, `/narration/cancel-audio`, and
-`GET /audio/{name}`). Step 2 does not yet offer a voice picker or a play button.
+Captions are the obvious next thing: measured durations make an SRT arithmetic
+rather than guesswork.
 
 ## Tests
 

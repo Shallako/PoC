@@ -3,8 +3,8 @@
 Turn the narration *script* into narration *audio*, and replace the word-count
 duration estimate with a measured one.
 
-Status: **implemented** 2026-08-13, API and storage only. The UI is not wired --
-see "Follow-ups". Scope agreed 2026-08-13.
+Status: **implemented** 2026-08-13, including the step 2 UI. Scope agreed
+2026-08-13.
 
 ---
 
@@ -204,13 +204,16 @@ Add one `@pytest.mark.live` test guarded by a budget env var like the existing
 5. Editing one narration line and re-running re-cuts that line only.
 6. Total spend for a 12-scene story is about $0.04.
 
-## Not done in this increment
+## Notes from the build
 
-**The UI.** Step 2 has no voice picker, no per-scene play button and no cost bar
-for speech; the feature is reachable only over the API. This was outside the
-agreed scope and is the obvious next piece.
+The engine parameter controls were extracted into `renderParams()` so voices
+reuse them: both declare `inputs` the same way, so both are drawn and collected
+the same way. The per-scene speak button uses `data-speak`, not `data-scene` --
+`collectScenePatch()` sweeps every `[data-scene]` element into the save payload
+and a button has no field to contribute, so reusing it would have corrupted
+saves.
 
-Two things found on the way that were fixed rather than deferred:
+Three things found on the way that were fixed rather than deferred:
 
 - `store._write_json` used a fixed `.tmp` filename and an unguarded `replace()`,
   and `load()` read the file with no retry. The UI polls project.json while
@@ -220,6 +223,9 @@ Two things found on the way that were fixed rather than deferred:
 - `plan_audio` totalled per-line estimates that had each been rounded for
   display, so the batch figure drifted. The total is computed once from the raw
   character count.
+- `money()` rounds to two decimals, which renders a spoken line as "$0.00". A
+  price that reads as free is worse than no price, so `moneyFine()` shows four
+  decimals below a cent.
 
 ## Follow-ups
 

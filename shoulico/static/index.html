@@ -100,6 +100,13 @@
   .hlp-pop{background:var(--blue-50);border:1px solid var(--blue-200);border-radius:8px;
            padding:9px 11px;margin:8px 0;color:#1e3a8a;font-size:12.5px;font-weight:400;
            line-height:1.55;max-width:52em}
+  /* narration audio: a player, and a duration that says whether it was measured */
+  .audiorow{display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  .audiorow audio{height:32px;max-width:280px}
+  .dur{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--slate-200);
+       background:var(--slate-50);color:var(--slate-700);white-space:nowrap}
+  .dur.measured{background:#f0fdf4;border-color:#bbf7d0;color:#15803d}
+  .status.speaking{background:var(--amber-50);border-color:var(--amber-200);color:#92400e}
   [dir=rtl] .counter{float:left}
 </style>
 </head>
@@ -189,9 +196,9 @@
 
     <div class="panel">
       <h2 data-i18n="s2.narr.h">Narration script</h2>
-      <p class="hint" data-i18n="s2.narr.hint">Script only — no synthesis. Written in the story's language.
-        Per-scene lines are saved to text files that share the image filename, so an editor lines the pair up
-        automatically.</p>
+      <p class="hint" data-i18n="s2.narr.hint">Written in the story's language. Per-scene lines are saved to
+        text files that share the image filename, so an editor lines the pair up automatically. Review and edit
+        here first — speaking it, below, is what costs money.</p>
       <div class="row">
         <div style="flex:3">
           <label><span data-i18n="s2.voice">Narrator voice / tone (optional)</span></label>
@@ -207,6 +214,34 @@
         </div>
       </div>
       <div class="muted" id="narrTotal" style="margin-top:8px"></div>
+    </div>
+
+    <div class="panel">
+      <h2 data-i18n="s2.tts.h">Narration audio</h2>
+      <p class="hint" data-i18n="s2.tts.hint">Speaks the script above through Renderful, on the same key that
+        renders the images. One file per scene under the image's own name, so an editor pairs them up. Speaking
+        a line also measures it — until then the duration beside each line is a word-count guess, and it runs
+        long.</p>
+      <div class="row" id="voiceList"></div>
+      <div id="voiceNotes"></div>
+      <div id="voiceParams" class="row"></div>
+      <div id="ttsPlan"></div>
+      <div class="row" style="margin-top:12px">
+        <div style="flex:0 0 auto">
+          <button class="btn spend" id="speakBtn" data-i18n="s2.speak">Speak narration — confirm spend</button>
+          <button type="button" class="hlp" data-help="help.speakBatch" aria-label="?">?</button>
+        </div>
+        <div style="flex:0 0 auto">
+          <label style="margin:0"><input type="checkbox" id="forceSpeak" style="width:auto">
+            <span data-i18n="s2.tts.force">re-speak everything</span><button type="button" class="hlp"
+              data-help="help.forceSpeak" aria-label="?">?</button></label>
+        </div>
+        <div style="flex:0 0 auto">
+          <button class="btn ghost" id="cancelSpeakBtn" data-i18n="s2.tts.cancel">Cancel run</button>
+        </div>
+        <div class="spacer"></div>
+        <span class="muted" id="ttsStatus" style="align-self:center"></span>
+      </div>
     </div>
 
     <div id="sceneList"></div>
@@ -245,8 +280,9 @@
     <div class="panel">
       <h2 data-i18n="s4.h">Export</h2>
       <p class="hint" data-i18n="s4.hint">Copies the selected render of each scene into <code>export/</code> under
-        flattened, sort-safe names, writes the matching narration text files, and drops a copy of
-        <code>manifest.json</code> beside them.</p>
+        flattened, sort-safe names, writes the matching narration text and audio files, and drops a copy of
+        <code>manifest.json</code> beside them. Image, script and voice share one stem per scene, so dropping the
+        folder into an editor pairs them on sight.</p>
       <label><input type="checkbox" id="flatten" checked style="width:auto">
         <span data-i18n="s4.flatten">flatten filenames (drop <code>_vNN</code> / <code>_seed</code>)</span></label>
       <p></p>
@@ -281,6 +317,8 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 let ENGINES = null, STATUS = null, P = null, POLL = null, PLAN = null;
+// Narration audio runs as its own job, so it gets its own registry, plan and poll.
+let VOICES = null, TTS_PLAN = null, TTS_POLL = null;
 
 // ------------------------------------------------------------------ fetch
 async function api(path, method = "GET", body) {
@@ -324,6 +362,11 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function money(n) { return "$" + (Number(n) || 0).toFixed(2); }
+// A spoken line costs fractions of a cent, and "$0.00" would be a lie.
+function moneyFine(n) {
+  const v = Number(n) || 0;
+  return v > 0 && v < 0.01 ? "$" + v.toFixed(4) : money(v);
+}
 
 // ------------------------------------------------------------------ language
 // The English below is the source of truth. It is posted to /api/ui/strings with
@@ -359,6 +402,7 @@ const DYN = {
   "status.failed": "failed",
   "status.dirty": "prompt changed",
   "status.unrendered": "not rendered",
+  "status.speaking": "speaking",
   "narr.total": "{count} {unit} across {scenes} scenes ≈ {seconds}s of read-aloud time.",
   "saved": "saved",
   "writing": "Writing…",
@@ -396,10 +440,33 @@ const DYN = {
   "export.th.n": "#",
   "export.th.image": "Image",
   "export.th.narration": "Narration",
+  "export.th.audio": "Audio",
+
+  "voice.price": "~{price} / 1000 chars",
+  "voice.notes": "{voice} notes",
+  "tts.summary": "{count} to speak, {skipped} already current. {chars} characters, estimated {estimate} at {price}/1000 chars.",
+  "tts.noscript": "Write the narration script first — there is nothing to speak yet.",
+  "tts.nothing": "Every line already has audio. Edit a line, or tick re-speak everything.",
+  "tts.missing": "{count} scene(s) have no narration line yet and will be skipped.",
+  "tts.unverified": "This voice is marked unverified in engines.json. Speak one line before committing to a batch.",
+  "tts.total": "{done} of {scenes} lines spoken · {seconds}s of voice-over so far.",
+  "tts.inflight": "speaking — {count} in flight",
+  "tts.reason.new": "not yet spoken",
+  "tts.reason.changed": "narration edited since it was spoken",
+  "tts.reason.forced": "re-speak (forced)",
+  "tts.reason.current": "already matches this line",
+  "scene.speak": "Speak · ~{price}",
+  "scene.audio.measured": "{seconds}s measured",
+  "scene.audio.estimated": "≈{seconds}s estimated",
+  "confirm.speak.one": "Send 1 line to Renderful to be spoken{cost}?\n\nThis spends real credit.",
+  "confirm.speak.many": "Send {count} lines to Renderful to be spoken{cost}?\n\nThis spends real credit.",
   "help.promptLang": "Scene prompts and the shared style block come back in the language the story is written in, so you can read and edit them. Image engines are trained mostly on English text, so if a prompt in your language renders badly, switch this to English and segment again — titles, beats and the narration script stay in your language either way.",
   "help.renderScene": "Sends this one scene to {engine} straight away and spends about {price}. No other scene is touched. If the scene already has an image, the new one is saved as a new version (v02, v03…) and the old file stays on disk. You are asked to confirm before anything is spent.",
   "help.renderBatch": "Renders every scene in the list above: the ones with no image yet, plus any whose prompt changed since it was rendered. Scenes that already match their prompt are skipped, so this never pays twice for the same image. Preview cost shows the exact list first.",
   "help.forceAll": "Ignores what is already on disk and re-renders every scene, including ones that already match their prompt. Use it after changing the seed or an engine parameter — the prompt is unchanged then, so nothing would be re-rendered otherwise. It costs the full batch again.",
+  "help.speakBatch": "Sends every narration line that has no audio yet, plus any you have edited since it was spoken, to the voice above. Lines whose audio already matches are skipped, so this never pays twice for the same line. Speech is billed per character, so the estimate follows the length of what you wrote — a whole story is usually a few cents. You are asked to confirm before anything is spent.",
+  "help.speakScene": "Speaks this one line straight away and spends about {price}. No other line is touched. The file is written under the same name as this scene's image, and its real duration is measured from the audio that comes back and shown beside it.",
+  "help.forceSpeak": "Ignores the audio already on disk and speaks every line again, including ones that have not changed. Use it after switching voice or changing speed — the text is the same then, so nothing would be re-spoken otherwise. It costs the full batch again.",
 };
 
 let SOURCE = {};                 // key -> English
@@ -498,13 +565,16 @@ document.addEventListener("click", (e) => {
   if (open) { btn.nextElementSibling.remove(); btn.classList.remove("on"); return; }
   const pop = document.createElement("div");
   pop.className = "hlp-pop";
-  pop.textContent = tf(btn.dataset.help, helpVars());
+  pop.textContent = tf(btn.dataset.help, helpVars(btn));
   btn.classList.add("on");
   btn.insertAdjacentElement("afterend", pop);
 });
-function helpVars() {
+function helpVars(btn) {
   const engine = (ENGINES && P && ENGINES.engines[P.engine]) ? ENGINES.engines[P.engine].name : "the engine";
-  return { engine, price: money(pricePerImage()) };
+  // A per-line speech price is carried on the button: it depends on the length
+  // of that line, not on a single figure for the project.
+  const price = (btn && btn.dataset.helpPrice) || money(pricePerImage());
+  return { engine, price };
 }
 function pricePerImage() {
   if (PLAN && typeof PLAN.price_per_image === "number") return PLAN.price_per_image;
@@ -518,6 +588,7 @@ function goStep(n) {
     b.classList.toggle("active", b.dataset.step === String(n)));
   [1, 2, 3, 4].forEach((i) => $("step" + i).classList.toggle("hidden", i !== n));
   $("costbar").style.display = n === 3 ? "flex" : "none";
+  if (n === 2) refreshTtsPlan();
   if (n === 3) refreshPlan();
 }
 document.querySelectorAll("nav.steps button[data-step]").forEach((b) =>
@@ -546,10 +617,18 @@ function renderEngines() {
        <ul class="muted">${eng.dialect_notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul></details>`
     : "";
 
-  const box = $("engineParams");
+  renderParams($("engineParams"), eng.inputs, P.params || {}, async (params) => {
+    try { P = await api(`/projects/${P.id}`, "PATCH", { params }); clearAlerts(); renderAll(); }
+    catch (err) { alertBox(err); }
+  });
+}
+
+// One schema, one set of controls. Image engines and voices declare `inputs` the
+// same way, so they are drawn and collected the same way.
+function renderParams(box, inputs, values, onChange) {
   box.innerHTML = "";
-  eng.inputs.forEach((spec) => {
-    const val = P.params[spec.key];
+  (inputs || []).forEach((spec) => {
+    const val = (values || {})[spec.key];
     const wrap = document.createElement("div");
     let control;
     if (spec.type === "enum") {
@@ -561,7 +640,7 @@ function renderEngines() {
     } else if (spec.type === "toggle") {
       control = `<input type="checkbox" data-param="${spec.key}" ${val ? "checked" : ""} style="width:auto">`;
     } else if (spec.type === "range") {
-      control = `<input type="number" data-param="${spec.key}" value="${val ?? ""}" min="${spec.min}" max="${spec.max}" step="${spec.step || 1}">`;
+      control = `<input type="number" data-param="${spec.key}" value="${val ?? ""}" min="${spec.min}" max="${spec.max}" step="${spec.step || 0.05}">`;
     } else {
       control = `<input type="text" data-param="${spec.key}" value="${escapeHtml(String(val ?? ""))}">`;
     }
@@ -570,14 +649,66 @@ function renderEngines() {
     box.appendChild(wrap);
   });
   box.querySelectorAll("[data-param]").forEach((el) => {
-    el.addEventListener("change", async () => {
+    el.addEventListener("change", () => {
       const params = {};
       box.querySelectorAll("[data-param]").forEach((c) => {
         params[c.dataset.param] = c.type === "checkbox" ? c.checked : c.value;
       });
-      try { P = await api(`/projects/${P.id}`, "PATCH", { params }); clearAlerts(); renderAll(); }
-      catch (err) { alertBox(err); }
+      onChange(params);
     });
+  });
+}
+
+// ------------------------------------------------------------------ voices
+function currentVoiceKey() {
+  return (P && P.narration && P.narration.voice_engine) || (VOICES && VOICES.default) || "";
+}
+function currentVoice() {
+  return VOICES ? VOICES.voices[currentVoiceKey()] : null;
+}
+function pricePer1kChars() {
+  if (TTS_PLAN && typeof TTS_PLAN.price_per_1k_chars === "number") return TTS_PLAN.price_per_1k_chars;
+  const v = currentVoice();
+  return v ? v.price_per_1k_chars : 0;
+}
+// Speech is billed per character, so a per-line price only exists relative to a
+// particular line.
+function priceForLine(scene) {
+  return pricePer1kChars() * String(scene.narration || "").length / 1000;
+}
+
+function renderVoices() {
+  if (!VOICES) return;
+  const list = $("voiceList");
+  list.innerHTML = "";
+  Object.values(VOICES.voices).forEach((v) => {
+    const div = document.createElement("div");
+    div.className = "engine" + (currentVoiceKey() === v.key ? " sel" : "");
+    div.innerHTML = `<b>${escapeHtml(v.name)} ${v.verified ? "" : `<span class='chip'>${t("engine.unverified")}</span>`}</b>
+      <span>${escapeHtml(v.provider)} · ${escapeHtml(v.strength)}</span>
+      <span>${tf("voice.price", { price: "$" + (v.price_per_1k_chars || 0).toFixed(3) })}</span>`;
+    div.onclick = async () => {
+      try {
+        P = await api(`/projects/${P.id}/narration/voice`, "POST", { voice_engine: v.key });
+        clearAlerts(); renderAll(); refreshTtsPlan();
+      } catch (err) { alertBox(err); }
+    };
+    list.appendChild(div);
+  });
+
+  const voice = currentVoice();
+  if (!voice) return;
+  $("voiceNotes").innerHTML = (voice.notes || []).length
+    ? `<details><summary>${escapeHtml(tf("voice.notes", { voice: voice.name }))}</summary>
+       <ul class="muted">${voice.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul></details>`
+    : "";
+
+  const values = (P.narration && P.narration.voice_params) || {};
+  renderParams($("voiceParams"), voice.inputs, values, async (voice_params) => {
+    try {
+      P = await api(`/projects/${P.id}/narration/voice`, "POST", { voice_params });
+      clearAlerts(); renderAll(); refreshTtsPlan();
+    } catch (err) { alertBox(err); }
   });
 }
 
@@ -613,11 +744,52 @@ function renderScenes() {
       <label><span>${escapeHtml(t("scene.narration"))}</span>
         <span class="counter">${escapeHtml(sceneLength(s))}</span></label>
       <textarea rows="2" data-scene="${s.n}" data-field="narration">${escapeHtml(s.narration || "")}</textarea>
+      ${sceneAudio(s)}
       <details><summary>${escapeHtml(t("scene.compiled"))}</summary>
         <pre class="prompt">${escapeHtml(s.compiled_prompt)}</pre></details>`;
     box.appendChild(el);
   });
+  // data-speak, not data-scene: collectScenePatch() sweeps every [data-scene]
+  // element into the save payload, and a button has no field to contribute.
+  box.querySelectorAll("[data-speak]").forEach((b) => {
+    b.onclick = () => doSpeak([Number(b.dataset.speak)], true);
+  });
   renderNarrationTotal();
+  renderTtsTotal();
+}
+
+// The duration is the number every downstream step needs, so it says plainly
+// whether it was measured off the audio or is still a word-count guess.
+function sceneAudio(s) {
+  if (!(s.narration || "").trim()) return "";
+  const measured = !!s.audio && s.audio_measured !== false;
+  const badge = s.audio_seconds
+    ? `<span class="dur ${measured ? "measured" : ""}">${escapeHtml(
+        tf(measured ? "scene.audio.measured" : "scene.audio.estimated",
+           { seconds: Number(s.audio_seconds).toFixed(1) }))}</span>`
+    : "";
+  const player = s.audio
+    ? `<audio controls preload="none"
+         src="/api/projects/${P.id}/audio/${encodeURIComponent(s.audio)}?v=${encodeURIComponent(s.audio)}"></audio>`
+    : "";
+  const state = s.audio_status && s.audio_status !== "done"
+    ? `<span class="status ${escapeHtml(s.audio_status)}">${escapeHtml(
+        s.audio_detail || t("status." + s.audio_status) || s.audio_status)}</span>`
+    : "";
+  return `<div class="audiorow">${badge}${player}
+    <button class="btn ghost sm" data-speak="${s.n}">${escapeHtml(
+      tf("scene.speak", { price: moneyFine(priceForLine(s)) }))}</button>
+    <button type="button" class="hlp" data-help="help.speakScene"
+      data-help-price="${escapeHtml(moneyFine(priceForLine(s)))}" aria-label="?">?</button>
+    ${state}</div>`;
+}
+
+function renderTtsTotal() {
+  const done = P.audio_lines_done || 0;
+  $("ttsStatus").textContent = done
+    ? tf("tts.total", { done, scenes: P.scenes.length,
+                        seconds: Number(P.audio_seconds_total || 0).toFixed(0) })
+    : "";
 }
 
 function sceneLength(s) {
@@ -741,6 +913,87 @@ function startPolling() {
   }, 2500);
 }
 
+// ------------------------------------------------------------------ narration audio
+async function refreshTtsPlan() {
+  if (!P || !P.scenes.length) { $("ttsPlan").innerHTML = ""; return; }
+  try {
+    const plan = await api(`/projects/${P.id}/narration/plan-audio`, "POST",
+                           { force: $("forceSpeak").checked });
+    TTS_PLAN = plan;
+    $("speakBtn").disabled = plan.count === 0 || !P.keys.renderful;
+
+    let html = "";
+    if (!P.keys.renderful) html += `<div class="err">${escapeHtml(t("plan.nokey"))}</div>`;
+    if (!plan.verified_engine) html += `<div class="warn">${escapeHtml(t("tts.unverified"))}</div>`;
+    plan.warnings.forEach((w) => { html += `<div class="warn">${escapeHtml(w)}</div>`; });
+    if (plan.missing_narration.length) {
+      html += `<div class="warn">${escapeHtml(
+        tf("tts.missing", { count: plan.missing_narration.length }))}</div>`;
+    }
+
+    if (!plan.count && !plan.skip.length) {
+      html += `<div class="note">${escapeHtml(t("tts.noscript"))}</div>`;
+    } else if (!plan.count) {
+      html += `<div class="note">${escapeHtml(t("tts.nothing"))}</div>`;
+    } else {
+      html += `<div class="note">${escapeHtml(tf("tts.summary", {
+        count: plan.count, skipped: plan.skip.length, chars: plan.chars,
+        estimate: moneyFine(plan.estimate),
+        price: "$" + (plan.price_per_1k_chars || 0).toFixed(3),
+      }))} ${escapeHtml(plan.price_note || "")}</div>`;
+      html += `<table><tr><th>${escapeHtml(t("plan.th.n"))}</th><th>${escapeHtml(t("plan.th.scene"))}</th>
+        <th>${escapeHtml(t("plan.th.why"))}</th></tr>` +
+        plan.speak.map((r) => `<tr><td>${r.n}</td><td>${escapeHtml(r.title)}</td>
+          <td class="muted">${escapeHtml(t("tts.reason." + r.reason_key))}</td></tr>`).join("") +
+        `</table>`;
+    }
+    $("ttsPlan").innerHTML = html;
+  } catch (err) { $("ttsPlan").innerHTML = `<div class="err">${escapeHtml(err.message)}</div>`; }
+}
+
+async function doSpeak(scenes, force) {
+  const n = scenes ? scenes.length : (TTS_PLAN ? TTS_PLAN.count : 0);
+  if (!n) return;
+  const estimate = scenes
+    ? scenes.reduce((a, num) => {
+        const s = P.scenes.find((x) => x.n === num);
+        return a + (s ? priceForLine(s) : 0);
+      }, 0)
+    : (TTS_PLAN ? TTS_PLAN.estimate : 0);
+  const cost = tf("confirm.cost", { cost: moneyFine(estimate) });
+  const question = n === 1 ? tf("confirm.speak.one", { cost })
+                           : tf("confirm.speak.many", { count: n, cost });
+  if (!confirm(question)) return;
+  try {
+    clearAlerts();
+    const res = await api(`/projects/${P.id}/narration/speak`, "POST",
+      { scenes: scenes || null, force: force ?? $("forceSpeak").checked, confirm: true });
+    if (!res.started) alertBox(res.message, "note");
+    startAudioPolling();
+  } catch (err) { alertBox(err); }
+}
+
+function startAudioPolling() {
+  if (TTS_POLL) clearInterval(TTS_POLL);
+  TTS_POLL = setInterval(async () => {
+    try {
+      P = await api(`/projects/${P.id}`);
+      renderScenes();
+      const job = P.audio_job;
+      if (job && job.running) {
+        const busy = P.scenes.filter(
+          (s) => s.audio_status === "speaking" || s.audio_status === "queued").length;
+        $("ttsStatus").textContent = tf("tts.inflight", { count: busy });
+      } else {
+        clearInterval(TTS_POLL); TTS_POLL = null;
+        renderTtsTotal();
+        if (job && job.fatal) alertBox(tf("job.fatal", { error: job.fatal }));
+        refreshTtsPlan();
+      }
+    } catch (err) { clearInterval(TTS_POLL); TTS_POLL = null; alertBox(err); }
+  }, 2000);
+}
+
 // ------------------------------------------------------------------ load
 function renderAll() {
   $("projName").value = P.name || "";
@@ -754,9 +1007,10 @@ function renderAll() {
   const label = langLabel(P.language);
   $("detectedLang").textContent = label ? tf("lang.detected", { language: label }) : t("lang.undetected");
   updateStoryCount();
-  renderEngines(); renderScenes(); renderGallery();
+  renderEngines(); renderVoices(); renderScenes(); renderGallery();
   $("cbSpent").textContent = money((P.spend && P.spend.actual) || 0);
   if (P.job && P.job.running && !POLL) startPolling();
+  if (P.audio_job && P.audio_job.running && !TTS_POLL) startAudioPolling();
 }
 
 function updateStoryCount() {
@@ -782,6 +1036,7 @@ async function loadProjects(selectId) {
 async function boot() {
   harvestStrings();
   ENGINES = await api("/engines");
+  VOICES = await api("/voices");
   STATUS = await api("/status");
   renderKeys();
   const have = await loadProjects();
@@ -848,6 +1103,9 @@ $("saveScenesBtn").onclick = async () => {
       style_profile: $("styleProfile").value, scenes: collectScenePatch(),
     });
     renderAll();
+    // An edited line is a line that has to be spoken again, and that changes
+    // both the batch and its price.
+    refreshTtsPlan();
     $("saveMsg").textContent = t("saved");
     setTimeout(() => ($("saveMsg").textContent = ""), 2000);
   } catch (err) { alertBox(err); }
@@ -862,8 +1120,17 @@ $("narrBtn").onclick = async () => {
       voice: $("narrVoice").value, seconds_per_scene: Number($("narrSecs").value),
     });
     renderAll();
+    refreshTtsPlan();
   } catch (err) { alertBox(err); }
   finally { btn.disabled = false; btn.textContent = t("s2.write"); }
+};
+
+$("speakBtn").onclick = () => doSpeak(null);
+$("forceSpeak").addEventListener("change", refreshTtsPlan);
+$("cancelSpeakBtn").onclick = async () => {
+  try { const r = await api(`/projects/${P.id}/narration/cancel-audio`, "POST");
+        alertBox(r.cancelling ? t("cancel.started") : t("cancel.idle"), "note"); }
+  catch (err) { alertBox(err); }
 };
 
 $("planBtn").onclick = refreshPlan;
@@ -883,9 +1150,10 @@ $("exportBtn").onclick = async () => {
     $("exportOut").innerHTML =
       `<div class="note">${escapeHtml(tf("export.dir", { dir: res.dir }))}</div>` +
       `<table><tr><th>${escapeHtml(t("export.th.n"))}</th><th>${escapeHtml(t("export.th.image"))}</th>
-        <th>${escapeHtml(t("export.th.narration"))}</th></tr>` +
+        <th>${escapeHtml(t("export.th.narration"))}</th><th>${escapeHtml(t("export.th.audio"))}</th></tr>` +
       res.files.map((f) => `<tr><td>${f.scene}</td><td><code>${escapeHtml(f.image)}</code></td>
-        <td><code>${escapeHtml(f.narration || "—")}</code></td></tr>`).join("") + `</table>`;
+        <td><code>${escapeHtml(f.narration || "—")}</code></td>
+        <td><code>${escapeHtml(f.audio || "—")}</code></td></tr>`).join("") + `</table>`;
   } catch (err) { alertBox(err); }
 };
 
