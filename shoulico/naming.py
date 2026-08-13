@@ -50,3 +50,16 @@ def flat_stem(project: str, n: int, slug: str) -> str:
 
 def full_voiceover_stem(project: str) -> str:
     return f"{project}_full-voiceover"
+
+
+# Narration audio shares the flattened image stem, so dropping export/ into an
+# editor pairs picture and voice on the same row without renaming anything.
+audio_stem = flat_stem
+
+# The manifest is keyed by asset, and one scene now has two: an image keyed by
+# its versioned stem, and a narration line keyed by this.
+_NARRATION_KEY_SUFFIX = "_narration"
+
+
+def narration_key(project: str, n: int, slug: str) -> str:
+    return flat_stem(project, n, slug) + _NARRATION_KEY_SUFFIX

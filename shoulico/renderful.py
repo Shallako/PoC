@@ -28,6 +28,21 @@ from .config import RENDERFUL_API_BASE
 POLL_SECONDS = 5
 POLL_TIMEOUT = 3600
 HTTP_RETRIES = 3
+RETRY_BACKOFF_SECONDS = 2               # multiplied by the attempt number
+
+# Renderful routes on `type`; everything else in the payload is model-specific.
+GEN_TYPE_IMAGE = "text-to-image"
+GEN_TYPE_AUDIO = "text-to-audio"
+
+# Image defaults, applied only when the engine schema left one out.
+DEFAULT_ASPECT_RATIO = "16:9"
+DEFAULT_RESOLUTION = "2K"
+DEFAULT_IMAGE_FORMAT = "png"
+IMAGE_OUTPUTS_PER_REQUEST = 1
+
+# Registry keys that drive the UI or model routing and must never be sent as
+# generation parameters.
+NON_API_PARAMS = frozenset({"model_id"})
 
 
 class FatalAPIError(RuntimeError):
@@ -74,28 +89,42 @@ def api_call(url: str, key: str, payload: dict | None = None) -> dict:
     raise RuntimeError(f"request to {url} failed after {HTTP_RETRIES} attempts: {last}")
 
 
-def submit(prompt: str, key: str, model: str, params: dict) -> dict:
-    """Params must already have passed engines.validate()."""
-    payload = {
-        "type": "text-to-image",
-        "model": model,
-        "prompt": prompt,
-        "aspect_ratio": params.get("aspect_ratio", "16:9"),
-        "resolution": params.get("resolution", "2K"),
-        "num_outputs": 1,
-        "output_format": params.get("output_format", "png"),
-    }
-    if params.get("seed") is not None:
-        payload["seed"] = params["seed"]
+def submit(prompt: str, key: str, model: str, params: dict, *,
+           gen_type: str = GEN_TYPE_IMAGE) -> dict:
+    """Params must already have passed engines.validate().
+
+    Image payloads keep the exact shape the Boston set was rendered with. Other
+    generation types send whatever their own schema declared and nothing else --
+    an image's aspect ratio means nothing to a speech model, and Renderful bills
+    a request it later rejects.
+    """
+    payload = {"type": gen_type, "model": model, "prompt": prompt}
+
+    if gen_type == GEN_TYPE_IMAGE:
+        payload.update({
+            "aspect_ratio": params.get("aspect_ratio", DEFAULT_ASPECT_RATIO),
+            "resolution": params.get("resolution", DEFAULT_RESOLUTION),
+            "num_outputs": IMAGE_OUTPUTS_PER_REQUEST,
+            "output_format": params.get("output_format", DEFAULT_IMAGE_FORMAT),
+        })
+        if params.get("seed") is not None:
+            payload["seed"] = params["seed"]
+    else:
+        payload.update({
+            k: v for k, v in params.items()
+            if k not in NON_API_PARAMS and v is not None and v != ""
+        })
+
     return api_call(f"{RENDERFUL_API_BASE}/generations", key, payload)
 
 
-def wait_for(gen_id: str, key: str, should_stop=None, on_state=None) -> dict:
-    deadline = time.time() + POLL_TIMEOUT
+def wait_for(gen_id: str, key: str, should_stop=None, on_state=None, *,
+             timeout: int = POLL_TIMEOUT, interval: int = POLL_SECONDS) -> dict:
+    deadline = time.time() + timeout
     while time.time() < deadline:
         if should_stop is not None and should_stop():
             raise RuntimeError("aborted")
-        time.sleep(POLL_SECONDS)
+        time.sleep(interval)
         status = api_call(f"{RENDERFUL_API_BASE}/generations/{gen_id}", key)
         state = status.get("status")
         if state == "completed":
@@ -104,7 +133,7 @@ def wait_for(gen_id: str, key: str, should_stop=None, on_state=None) -> dict:
             raise RuntimeError(f"generation failed: {status.get('error') or status}")
         if on_state:
             on_state(state)
-    raise RuntimeError(f"timed out after {POLL_TIMEOUT}s waiting for {gen_id}")
+    raise RuntimeError(f"timed out after {timeout}s waiting for {gen_id}")
 
 
 def download(url: str, timeout: int = 120) -> bytes:
@@ -121,12 +150,21 @@ def download(url: str, timeout: int = 120) -> bytes:
 
 
 def sniff(data: bytes) -> str:
+    """The format the bytes actually are, whatever was requested (FR-905)."""
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return "png"
     if data[:3] == b"\xff\xd8\xff":
         return "jpg"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "webp"
+    if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
+        return "wav"
+    # ElevenLabs delivers MP3 with an ID3v2 tag, but a stripped file starts
+    # straight on the 11-bit frame sync, so both have to count.
+    if data[:3] == b"ID3":
+        return "mp3"
+    if len(data) >= 2 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0:
+        return "mp3"
     return "bin"
 
 

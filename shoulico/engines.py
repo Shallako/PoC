@@ -110,8 +110,108 @@ DEFAULT_REGISTRY: dict[str, Any] = {
 }
 
 
+SECTION_ENGINES = "engines"
+SECTION_VOICES = "voices"
+
+# TTS is billed by the character, not the request: a 70-character line billed
+# 0.0035 live, which is exactly $0.05 per 1000 characters. Estimating per line
+# would be wrong for both a two-word beat and a long paragraph.
+CHARS_PER_PRICE_UNIT = 1000
+
+# Voice registry. Only eleven_flash_v2_5 has been put through a live account
+# (generation tro5R9t8qky565RboWR6, 2026-08-13). The individual voice, speed and
+# stability values below are declared from the model's published schema and have
+# not each been proven -- the same rule as the image engines: prove one line
+# before a batch.
+DEFAULT_VOICES: dict[str, Any] = {
+    "eleven_flash_v2_5": {
+        "name": "Eleven Flash v2.5",
+        "provider": "ElevenLabs (via Renderful)",
+        "strength": "Fastest and cheapest · proven on this account",
+        "badges": ["TTS"],
+        "verified": True,
+        "price_per_1k_chars": 0.05,
+        "price_note": "Derived, not guessed: a live 70-character line on 2026-08-13 "
+                      "billed 0.0035, i.e. $0.05 per 1000 characters. The real charge "
+                      "comes back on the response and is stored in manifest.json.",
+        "notes": [
+            "Proven: model id and prompt. Unproven: voice, speed, stability, "
+            "similarity_boost and output_format values -- synthesise one line first.",
+            "Leave the language code blank to follow the story's own language.",
+        ],
+        "inputs": [
+            {
+                "key": "voice", "label": "Voice", "type": "enum",
+                "options": ["George", "Rachel", "Adam", "Bella", "Josh", "Arnold"],
+                "default": "George",
+            },
+            {
+                "key": "language_code", "label": "Language code (blank = follow the story)",
+                "type": "text", "default": "", "required": False,
+            },
+            {
+                "key": "speed", "label": "Speed", "type": "range",
+                "min": 0.25, "max": 4.0, "default": 1.0,
+            },
+            {
+                "key": "stability", "label": "Stability", "type": "range",
+                "min": 0.0, "max": 1.0, "default": 0.5,
+            },
+            {
+                "key": "similarity_boost", "label": "Similarity boost", "type": "range",
+                "min": 0.0, "max": 1.0, "default": 0.75,
+            },
+        ],
+    },
+    "speech-2.6-turbo": {
+        "name": "MiniMax Speech 2.6 Turbo",
+        "provider": "MiniMax (via Renderful)",
+        "strength": "40 languages · for stories not written in English",
+        "badges": ["TTS", "multilingual"],
+        "verified": False,
+        "price_per_1k_chars": 0.06,
+        "price_note": "Unverified. Priced from the listing's floor ($0.06). Synthesise "
+                      "one line and read the real charge off the response before a batch.",
+        "notes": [
+            "Unverified engine: synthesise one line first, then the batch.",
+            "Parameter names are assumed to match the ElevenLabs family and may differ.",
+        ],
+        "inputs": [
+            {
+                "key": "language_code", "label": "Language code (blank = follow the story)",
+                "type": "text", "default": "", "required": False,
+            },
+            {
+                "key": "speed", "label": "Speed", "type": "range",
+                "min": 0.5, "max": 2.0, "default": 1.0,
+            },
+        ],
+    },
+}
+
+DEFAULT_REGISTRY["default_voice"] = config.DEFAULT_VOICE
+DEFAULT_REGISTRY[SECTION_VOICES] = DEFAULT_VOICES
+
+
 class ParamError(ValueError):
     """A parameter that the engine schema rejects. Never reaches the API."""
+
+
+def _migrate(reg: dict) -> tuple[dict, bool]:
+    """Add registry sections a hand-written engines.json predates.
+
+    The file is the user's to edit, so missing sections are filled in rather than
+    overwritten -- an engines.json written before voices existed keeps every
+    image engine exactly as it was.
+    """
+    changed = False
+    if SECTION_VOICES not in reg:
+        reg[SECTION_VOICES] = json.loads(json.dumps(DEFAULT_VOICES))
+        changed = True
+    if "default_voice" not in reg:
+        reg["default_voice"] = config.DEFAULT_VOICE
+        changed = True
+    return reg, changed
 
 
 def registry(reload: bool = False) -> dict:
@@ -125,32 +225,48 @@ def registry(reload: bool = False) -> dict:
             path.write_text(json.dumps(DEFAULT_REGISTRY, indent=2), encoding="utf-8")
             _cache = json.loads(json.dumps(DEFAULT_REGISTRY))
         else:
-            _cache = json.loads(path.read_text(encoding="utf-8"))
+            loaded, changed = _migrate(json.loads(path.read_text(encoding="utf-8")))
+            if changed:
+                path.write_text(json.dumps(loaded, indent=2, ensure_ascii=False),
+                                encoding="utf-8")
+            _cache = loaded
         return _cache
 
 
+def _entry(section: str, key: str) -> dict:
+    found = registry().get(section, {}).get(key)
+    if found is None:
+        noun = "voice" if section == SECTION_VOICES else "engine"
+        raise ParamError(f"unknown {noun} {key!r}")
+    return found
+
+
 def engine(key: str) -> dict:
-    reg = registry()
-    eng = reg["engines"].get(key)
-    if eng is None:
-        raise ParamError(f"unknown engine {key!r}")
-    return eng
+    return _entry(SECTION_ENGINES, key)
+
+
+def voice(key: str) -> dict:
+    return _entry(SECTION_VOICES, key)
+
+
+def default_voice_key() -> str:
+    return registry().get("default_voice", config.DEFAULT_VOICE)
 
 
 def default_engine_key() -> str:
     return registry().get("default", config.DEFAULT_ENGINE)
 
 
-def defaults_for(key: str) -> dict:
-    return {i["key"]: i.get("default") for i in engine(key)["inputs"]}
+def defaults_for(key: str, section: str = SECTION_ENGINES) -> dict:
+    return {i["key"]: i.get("default") for i in _entry(section, key)["inputs"]}
 
 
-def validate(key: str, params: dict | None) -> dict:
+def validate(key: str, params: dict | None, section: str = SECTION_ENGINES) -> dict:
     """Return a normalised copy of `params`, or raise ParamError.
 
     Runs before every submission -- a rejected request still costs money.
     """
-    eng = engine(key)
+    eng = _entry(section, key)
     schema = {i["key"]: i for i in eng["inputs"]}
     params = dict(params or {})
 
@@ -221,10 +337,11 @@ def model_id(key: str, params: dict) -> str:
     return key
 
 
-def unconfirmed_values(key: str, params: dict) -> list[str]:
+def unconfirmed_values(key: str, params: dict,
+                       section: str = SECTION_ENGINES) -> list[str]:
     """Params outside the values we have actually seen a live account accept."""
     warnings = []
-    for spec in engine(key)["inputs"]:
+    for spec in _entry(section, key)["inputs"]:
         confirmed = spec.get("confirmed")
         if not confirmed:
             continue
@@ -250,6 +367,43 @@ def price_per_image(key: str, params: dict | None = None) -> float:
         if value in prices:
             return float(prices[value])
     return base
+
+
+def price_per_1k_chars(voice_key: str) -> float:
+    return float(voice(voice_key).get("price_per_1k_chars") or 0.0)
+
+
+def price_for_text(voice_key: str, text: str) -> float:
+    """Estimated charge for synthesising one line.
+
+    Billed by the character, so a two-word beat and a long paragraph cannot cost
+    the same. The actual charge still comes back on the response.
+    """
+    chars = len(text or "")
+    return price_per_1k_chars(voice_key) * chars / CHARS_PER_PRICE_UNIT
+
+
+def public_voices() -> dict:
+    """Voice registry as sent to the browser."""
+    reg = registry()
+    return {
+        "default": reg.get("default_voice", config.DEFAULT_VOICE),
+        "voices": {
+            k: {
+                "key": k,
+                "name": v.get("name", k),
+                "provider": v.get("provider", ""),
+                "strength": v.get("strength", ""),
+                "badges": v.get("badges", []),
+                "verified": bool(v.get("verified")),
+                "price_per_1k_chars": v.get("price_per_1k_chars", 0.0),
+                "price_note": v.get("price_note", ""),
+                "notes": v.get("notes", []),
+                "inputs": v.get("inputs", []),
+            }
+            for k, v in reg.get(SECTION_VOICES, {}).items()
+        },
+    }
 
 
 def public_registry() -> dict:

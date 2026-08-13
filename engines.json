@@ -150,5 +150,103 @@
         }
       ]
     }
-  }
+  },
+  "voices": {
+    "eleven_flash_v2_5": {
+      "name": "Eleven Flash v2.5",
+      "provider": "ElevenLabs (via Renderful)",
+      "strength": "Fastest and cheapest · proven on this account",
+      "badges": [
+        "TTS"
+      ],
+      "verified": true,
+      "price_per_1k_chars": 0.05,
+      "price_note": "Derived, not guessed: a live 70-character line on 2026-08-13 billed 0.0035, i.e. $0.05 per 1000 characters. The real charge comes back on the response and is stored in manifest.json.",
+      "notes": [
+        "Proven: model id and prompt. Unproven: voice, speed, stability, similarity_boost and output_format values -- synthesise one line first.",
+        "Leave the language code blank to follow the story's own language."
+      ],
+      "inputs": [
+        {
+          "key": "voice",
+          "label": "Voice",
+          "type": "enum",
+          "options": [
+            "George",
+            "Rachel",
+            "Adam",
+            "Bella",
+            "Josh",
+            "Arnold"
+          ],
+          "default": "George"
+        },
+        {
+          "key": "language_code",
+          "label": "Language code (blank = follow the story)",
+          "type": "text",
+          "default": "",
+          "required": false
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "type": "range",
+          "min": 0.25,
+          "max": 4.0,
+          "default": 1.0
+        },
+        {
+          "key": "stability",
+          "label": "Stability",
+          "type": "range",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.5
+        },
+        {
+          "key": "similarity_boost",
+          "label": "Similarity boost",
+          "type": "range",
+          "min": 0.0,
+          "max": 1.0,
+          "default": 0.75
+        }
+      ]
+    },
+    "speech-2.6-turbo": {
+      "name": "MiniMax Speech 2.6 Turbo",
+      "provider": "MiniMax (via Renderful)",
+      "strength": "40 languages · for stories not written in English",
+      "badges": [
+        "TTS",
+        "multilingual"
+      ],
+      "verified": false,
+      "price_per_1k_chars": 0.06,
+      "price_note": "Unverified. Priced from the listing's floor ($0.06). Synthesise one line and read the real charge off the response before a batch.",
+      "notes": [
+        "Unverified engine: synthesise one line first, then the batch.",
+        "Parameter names are assumed to match the ElevenLabs family and may differ."
+      ],
+      "inputs": [
+        {
+          "key": "language_code",
+          "label": "Language code (blank = follow the story)",
+          "type": "text",
+          "default": "",
+          "required": false
+        },
+        {
+          "key": "speed",
+          "label": "Speed",
+          "type": "range",
+          "min": 0.5,
+          "max": 2.0,
+          "default": 1.0
+        }
+      ]
+    }
+  },
+  "default_voice": "eleven_flash_v2_5"
 }

@@ -77,7 +77,8 @@ def test_full_render_writes_images_manifest_and_spend(client, claude, api):
     assert images(pid) == [f"{pid}_{n:03d}_beat-{n}_v01_seed4242.jpg" for n in (1, 2, 3)]
     assert all(s["status"] == "done" and not s["dirty"] for s in p["scenes"])
     assert all(s["asset_prompt"] == s["compiled_prompt"] for s in p["scenes"])
-    assert p["spend"] == {"images": 3, "actual": 0.12}
+    # `lines` counts spoken narration; a render leaves it at zero.
+    assert p["spend"] == {"images": 3, "lines": 0, "actual": 0.12}
 
     sent = api.submits[0]["payload"]
     assert sent["model"] == "seedream-5.0-pro" and sent["type"] == "text-to-image"

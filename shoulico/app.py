@@ -71,6 +71,17 @@ class NarrationRequest(BaseModel):
     seconds_per_scene: int | None = None
 
 
+class VoiceRequest(BaseModel):
+    """Which TTS model speaks the script, and how."""
+
+    voice_engine: str | None = None
+    voice_params: dict | None = None
+
+
+class SpeakRequest(PlanRequest):
+    confirm: bool = False
+
+
 class ExportRequest(BaseModel):
     flatten: bool = True
 
@@ -145,6 +156,12 @@ def _decorate(project: dict) -> dict:
     out = dict(project)
     out["scenes"] = scenes
     out["job"] = orchestrator.status(project["id"])
+    out["audio_job"] = orchestrator.status(project["id"], orchestrator.KIND_AUDIO)
+    # Runtime of the finished voice-over: measured where audio exists, estimated
+    # where it does not, so the number is honest about which it is.
+    out["audio_seconds_total"] = round(
+        sum(float(s.get("audio_seconds") or 0.0) for s in project.get("scenes", [])), 2)
+    out["audio_lines_done"] = sum(1 for s in project.get("scenes", []) if s.get("audio"))
     out["keys"] = config.key_status()
     out["narration_full"] = narration_mod.full_script(project.get("scenes", []))
     out.setdefault("language", {"code": "", "name": "", "native_name": ""})
@@ -483,6 +500,80 @@ def api_narration_save(pid: str) -> dict:
     project = _load(pid)
     written = store.write_narration_files(pid, project)
     return {"written": written, "dir": str(store.narration_dir(pid))}
+
+
+# --------------------------------------------------------------------------- #
+# Step 3c: narration audio (TTS)
+#
+# Speaking the script spends money, so it follows the render contract exactly:
+# preview the cost first, and POST .../speak without confirm is a 400.
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/voices")
+def api_voices() -> dict:
+    return engines.public_voices()
+
+
+@app.post("/api/projects/{pid}/narration/voice")
+def api_voice_settings(pid: str, body: VoiceRequest) -> dict:
+    project = _load(pid)
+    settings = {**project.get("narration", {})}
+    voice_key = body.voice_engine or settings.get("voice_engine") \
+        or engines.default_voice_key()
+    try:
+        params = engines.validate(
+            voice_key,
+            body.voice_params if body.voice_params is not None
+            else settings.get("voice_params"),
+            engines.SECTION_VOICES,
+        )
+    except engines.ParamError as e:
+        raise HTTPException(400, str(e)) from None
+
+    def apply(proj):
+        narration = proj.setdefault("narration", {})
+        narration["voice_engine"] = voice_key
+        narration["voice_params"] = params
+    return _decorate(store.mutate(pid, apply))
+
+
+@app.post("/api/projects/{pid}/narration/plan-audio")
+def api_plan_audio(pid: str, body: PlanRequest) -> dict:
+    project = _load(pid)
+    try:
+        return orchestrator.plan_audio(project, body.scenes, body.force)
+    except engines.ParamError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.post("/api/projects/{pid}/narration/speak")
+def api_speak(pid: str, body: SpeakRequest) -> dict:
+    _load(pid)
+    if not body.confirm:
+        raise HTTPException(
+            400, "Synthesising narration spends money and needs an explicit confirmation.")
+    try:
+        return orchestrator.start_audio(pid, body.scenes, body.force)
+    except engines.ParamError as e:
+        raise HTTPException(400, str(e)) from None
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from None
+
+
+@app.post("/api/projects/{pid}/narration/cancel-audio")
+def api_cancel_audio(pid: str) -> dict:
+    _load(pid)
+    return {"cancelling": orchestrator.cancel(pid, orchestrator.KIND_AUDIO)}
+
+
+@app.get("/api/projects/{pid}/audio/{name}")
+def api_audio(pid: str, name: str):
+    _load(pid)
+    safe = Path(name).name
+    path = store.audio_dir(pid) / safe
+    if not path.is_file():
+        raise HTTPException(404, "No such audio")
+    return FileResponse(path)
 
 
 # --------------------------------------------------------------------------- #

@@ -1,14 +1,21 @@
 # Shoulico -- local MVP
 
-Story -> scenes -> engine-targeted prompts -> images -> narration script -> export.
+Story -> scenes -> engine-targeted prompts -> images -> narration script ->
+narration audio -> export.
 
 Image creation defaults to **Seedream 5.0 Pro** through the Renderful API.
-Scope is **images and narration script only** -- no video, no TTS, no audio, no
-accounts, no billing layer.
+Narration is spoken by **ElevenLabs Flash v2.5**, through the same API and the
+same key. Scope is **images, narration script and narration audio** -- no video
+assembly, no accounts, no billing layer.
 
-"Narration" here means the **script text** (PRD FR-1201/1203/1206): Claude writes
-one line per scene, you review and edit it, and it is written to text files that
-share the image filename. Nothing is synthesised.
+Claude writes one narration line per scene (PRD FR-1201/1203/1206) and you review
+and edit it before anything is spoken. Synthesis is a separate, confirmed step:
+the script is yours to fix first, and speaking it costs money.
+
+Speaking a line also **measures** it. Until then a duration is a word-count
+estimate at 150 wpm, which runs about 30% long -- a 13-word line estimates 5.2s
+and speaks in 4.2s. Every downstream step (captions, image timing, clip length)
+depends on that number, so it comes off the delivered bytes, not a guess.
 
 ---
 
@@ -26,7 +33,7 @@ python -m venv .venv
 
 | Key | Used for | Lookup order |
 |---|---|---|
-| Renderful | image rendering | `RENDERFUL_API_KEY` -> `PoC\api_key.txt` -> `Renderful\api_key.txt` |
+| Renderful | image rendering **and narration audio** | `RENDERFUL_API_KEY` -> `PoC\api_key.txt` -> `Renderful\api_key.txt` |
 | Anthropic | segmentation, prompt writing, narration | `ANTHROPIC_API_KEY` -> `PoC\anthropic_key.txt` -> `Renderful\anthropic_key.txt` -> an `ant auth login` profile |
 
 Both keys are present on this machine (`PoC\api_key.txt` and
@@ -117,7 +124,7 @@ spend money.
 
 ---
 
-## The four steps
+## The five steps
 
 1. **Story** -- paste up to 5,000 characters in any language, pick the image count
    and the engine. Engine parameters are rendered from the registry schema and
@@ -133,10 +140,14 @@ spend money.
    Three workers, live per-scene status, per-scene re-render from the gallery (the
    `?` beside that button says what it spends), and `POST .../cancel` stops the run
    and returns unfinished scenes to pending.
-4. **Export** -- flattened, sort-safe copies plus matching narration files, the
-   full voiceover, and a copy of `manifest.json`. `flatten: false` keeps the
-   versioned filenames instead. `export/` is cleared first, so it never carries
-   files from a previous run.
+4. **Speak** -- preview the character count and its cost, then confirm. Same
+   contract as rendering: `POST /api/projects/{id}/narration/speak` without
+   `confirm: true` is a 400. One MP3 per scene under the image's own stem, and the
+   measured duration is stored against the scene.
+5. **Export** -- flattened, sort-safe copies plus matching narration files and
+   audio, the full voiceover, and a copy of `manifest.json`. `flatten: false`
+   keeps the versioned filenames instead. `export/` is cleared first, so it never
+   carries files from a previous run.
 
 ## What lands on disk
 
@@ -146,9 +157,10 @@ projects/<project-id>/
   manifest.json    one record per asset: engine, seed, params, exact prompt sent, cost
   images/          <project>_<NNN>_<slug>_v<VV>[_seed<SEED>].<jpg|png>
   narration/       <project>_<NNN>_<slug>.txt   and  <project>_full-voiceover.txt
-  export/          flattened <project>_<NNN>_<slug>.<jpg|png> + .txt
+  audio/           <project>_<NNN>_<slug>.mp3   -- the spoken line, same stem
+  export/          flattened <project>_<NNN>_<slug>.<jpg|png> + .txt + .mp3
                    + <project>_full-voiceover.txt + manifest.json
-engines.json       the engine registry -- edit to add a model
+engines.json       the engine and voice registries -- edit to add a model
 i18n/<code>.json   cached interface translations, one file per language
 ```
 
@@ -172,7 +184,21 @@ language they wrote in. Two consequences worth knowing:
   those unique and in order.
 
 Narration length is estimated in words at 150 wpm, or in characters at 350 cpm for
-scripts that do not space their words (Chinese, Japanese).
+scripts that do not space their words (Chinese, Japanese). That estimate is
+pre-flight only, and it runs long -- a 13-word line estimates 5.2s and speaks in
+4.2s. Once a line has been spoken the duration is read off the delivered MP3
+(`shoulico.audio` parses the ID3v2 tag and MPEG frame headers directly, so there
+is no ffmpeg dependency) and the scene carries `audio_measured: true`. A container
+that cannot be parsed keeps the audio and falls back to the estimate rather than
+failing a line you have already paid for.
+
+**Narration audio.** Idempotent on the *text*, exactly as rendering is on the
+prompt: edit one line and only that line is re-spoken; run again with nothing
+changed and nothing is spent. Blank the language code and the voice follows the
+story's own detected language, which is the point of segmenting in it. Video
+models that advertise "native audio" are not used for this -- they invent
+ambience and dialogue from the image prompt and cannot be handed an approved
+script, so pictures move and TTS speaks.
 
 **The interface follows the story.** Once a language is detected, the page posts
 its own English strings to `POST /api/ui/strings` and redraws itself in that
@@ -201,7 +227,8 @@ There is no negative-prompt parameter, so exclusions have to be phrased in words
 
 **Format follows the bytes, not the request.** Renderful has delivered both JPEG
 and PNG regardless of the `output_format` asked for, so the extension comes from
-sniffing the payload (`renderful.sniff`: png / jpg / webp, else `.img`). The bytes
+sniffing the payload (`renderful.sniff`: png / jpg / webp / mp3 / wav, else
+`.img`; an MP3 counts by its `ID3` tag *or* a bare frame sync). The bytes
 are saved as delivered; re-encoding a JPEG to PNG cannot undo compression that
 already happened, it just costs ~6x the bytes (`renderful.save_delivered` takes a
 `convert_png` flag if you ever want it, and it needs Pillow).
@@ -211,7 +238,11 @@ already happened, it just costs ~6x the bytes (`renderful.save_delivered` takes 
 credit or throttled, and the UI says so. Other 4xx (content rejection 451,
 malformed request) fail that one scene immediately and the batch continues. 5xx and
 network errors retry three times with backoff. Polling waits up to 3600s per image;
-600 once stranded a paid render that finished later.
+600 once stranded a paid render that finished later. Speech is a different animal
+-- it came back in ~5s live -- so it polls every 2s up to 300s.
+
+A render and a voice run hold separate job slots, so cancelling one never stops
+the other.
 
 **When Claude is overloaded.** `overloaded_error` (HTTP 529) means Anthropic
 turned the request away before the model ran -- it is capacity on their side, it
@@ -241,6 +272,13 @@ table falls back to the dearer headline price. The *actual* charge comes back on
 Renderful response and is what accumulates in "Spent so far" and in each manifest
 record.
 
+Speech is billed **per character**, not per request, so its estimate is
+`price_per_1k_chars * chars / 1000` rather than a per-line figure -- a two-word
+beat and a long paragraph cannot cost the same. That rate is derived, not
+guessed: a live 70-character line billed $0.0035, which is exactly $0.05 per 1000
+characters. A whole 12-scene story speaks for roughly **$0.04**, so the cost of
+voicing a project is a rounding error next to rendering it.
+
 ---
 
 ## Adding an engine
@@ -262,23 +300,49 @@ The built-in `custom` engine lets you type any Renderful model id.
 Only `seedream-5.0-pro` is confirmed against a live account (it rendered the Boston
 set). Everything else is unverified until you prove it.
 
+## Adding a voice
+
+The same file, under `voices`, with the same schema machinery -- `inputs` drives
+both the controls and validation, and `verified: false` warns before a batch:
+
+```json
+{"key": "voice", "label": "Voice", "type": "enum",
+ "options": ["George", "Rachel", "Adam", "Bella", "Josh", "Arnold"],
+ "default": "George"}
+```
+
+An `engines.json` written before voices existed gains the section on first load;
+the image engines in it are left exactly as they were. `GET /api/v1/models?type=
+text-to-audio` on your own account lists what else you could put here -- there
+were ten when this was written, across ElevenLabs and MiniMax.
+
+Only `eleven_flash_v2_5` has been through a live account, and only its model id
+and prompt. The voice, speed and stability *values* are declared from the
+published schema and unproven -- speak one line before a batch.
+
 ## Not built (deliberately)
 
-Video assembly / Seedance, TTS and audio, SRT/VTT captions, billing and credits,
-accounts and auth, sharing links. Multi-user concerns from the PRD (Postgres, Redis,
-S3, KMS, spend caps at an orchestrator) collapse here to: the filesystem,
-`manifest.json`, a thread pool, and a confirmation dialog.
+Video assembly / Seedance, SRT/VTT captions, billing and credits, accounts and
+auth, sharing links. Multi-user concerns from the PRD (Postgres, Redis, S3, KMS,
+spend caps at an orchestrator) collapse here to: the filesystem, `manifest.json`,
+a thread pool, and a confirmation dialog.
+
+Narration audio has no UI yet: it is API-only (`/narration/plan-audio`,
+`/narration/voice`, `/narration/speak`, `/narration/cancel-audio`, and
+`GET /audio/{name}`). Step 2 does not yet offer a voice picker or a play button.
 
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 65 offline tests, free
+    .venv\Scripts\python -m pytest             # 89 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 The offline suite drives the real FastAPI app against a fake Renderful HTTP
 server on loopback and a fake Anthropic client, so the retry ladder, poll loop,
 4xx split and file writing all execute for real. An autouse fixture turns any
-non-loopback request into a failure, so it can never spend.
+non-loopback request into a failure, so it can never spend. The fake serves a
+genuine MPEG frame stream for speech jobs, so the duration parser is measured
+against real bytes rather than a stub.
 
 The live suite talks to the real Renderful and Anthropic accounts. It is skipped
 unless you pass --live, renders one 1K image (SHOULICO_LIVE_IMAGE_BUDGET, default

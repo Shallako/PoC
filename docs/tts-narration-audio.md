@@ -3,7 +3,8 @@
 Turn the narration *script* into narration *audio*, and replace the word-count
 duration estimate with a measured one.
 
-Status: specification. Scope agreed 2026-08-13.
+Status: **implemented** 2026-08-13, API and storage only. The UI is not wired --
+see "Follow-ups". Scope agreed 2026-08-13.
 
 ---
 
@@ -112,9 +113,10 @@ blocking change.
 - Add `gen_type: str = "text-to-image"` and build the payload from the engine's
   declared inputs instead of the fixed image five, so an audio engine sends
   `prompt` plus its own params and nothing else.
-- `sniff()`: add `mp3` (ID3 or frame sync) and `wav` (`RIFF`/`WAVE`). Note the
-  README says the fallback extension is `.img`; the code returns `"bin"`. Leave
-  the behaviour, fix the README line.
+- `sniff()`: add `mp3` (ID3 or frame sync) and `wav` (`RIFF`/`WAVE`). The `"bin"`
+  sentinel it returns is already mapped to a `.img` extension by
+  `save_delivered`, so the README is right as written; audio maps its own
+  sentinel to `.audio`.
 - Add `POLL_TIMEOUT_AUDIO = 300`. The 3600s ceiling exists because a paid image
   render once finished late; a 5s TTS job does not need it.
 
@@ -201,6 +203,23 @@ Add one `@pytest.mark.live` test guarded by a budget env var like the existing
 4. `export/` holds image, text and audio under one stem per scene.
 5. Editing one narration line and re-running re-cuts that line only.
 6. Total spend for a 12-scene story is about $0.04.
+
+## Not done in this increment
+
+**The UI.** Step 2 has no voice picker, no per-scene play button and no cost bar
+for speech; the feature is reachable only over the API. This was outside the
+agreed scope and is the obvious next piece.
+
+Two things found on the way that were fixed rather than deferred:
+
+- `store._write_json` used a fixed `.tmp` filename and an unguarded `replace()`,
+  and `load()` read the file with no retry. The UI polls project.json while
+  workers write it, so on Windows a reader inside the swap window got
+  `PermissionError` -- intermittently losing render state that had been paid for.
+  Writes now use a per-write temp name and retry the swap; reads retry too.
+- `plan_audio` totalled per-line estimates that had each been rounded for
+  display, so the batch figure drifted. The total is computed once from the raw
+  character count.
 
 ## Follow-ups
 

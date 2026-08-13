@@ -10,13 +10,16 @@ from __future__ import annotations
 import json
 import shutil
 import threading
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+from uuid import uuid4
 
 from . import config, engines
-from .naming import asset_stem, flat_stem, full_voiceover_stem, project_slug
+from .naming import (asset_stem, audio_stem, flat_stem, full_voiceover_stem,
+                     narration_key, project_slug)
 
 _locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 _locks_guard = threading.Lock()
@@ -47,6 +50,10 @@ def narration_dir(pid: str) -> Path:
     return project_dir(pid) / "narration"
 
 
+def audio_dir(pid: str) -> Path:
+    return project_dir(pid) / "audio"
+
+
 def export_dir(pid: str) -> Path:
     return project_dir(pid) / "export"
 
@@ -59,11 +66,46 @@ def manifest_file(pid: str) -> Path:
     return project_dir(pid) / "manifest.json"
 
 
+# Windows refuses to replace a file another handle has open, and the UI polls
+# project.json while workers write it. The temp name is per-write so two writers
+# can never share one, and the swap is retried briefly rather than losing the
+# render state a paid job just produced.
+_REPLACE_ATTEMPTS = 5
+_REPLACE_BACKOFF_SECONDS = 0.05
+
+
+def _read_json(path: Path):
+    """Read JSON a worker thread may be replacing underneath us.
+
+    The swap below is as close to atomic as Windows offers, but a reader that
+    opens the file inside that window still gets PermissionError. The UI polls
+    the project throughout a render, so this is a normal event, not an error.
+    """
+    last: PermissionError | None = None
+    for attempt in range(1, _REPLACE_ATTEMPTS + 1):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except PermissionError as e:
+            last = e
+            time.sleep(_REPLACE_BACKOFF_SECONDS * attempt)
+    raise last
+
+
 def _write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(f"{path.suffix}.{uuid4().hex}.tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    try:
+        for attempt in range(1, _REPLACE_ATTEMPTS + 1):
+            try:
+                tmp.replace(path)
+                return
+            except PermissionError:
+                if attempt == _REPLACE_ATTEMPTS:
+                    raise
+                time.sleep(_REPLACE_BACKOFF_SECONDS * attempt)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -79,7 +121,7 @@ def list_projects() -> list[dict]:
         if not pf.is_file():
             continue
         try:
-            p = json.loads(pf.read_text(encoding="utf-8"))
+            p = _read_json(pf)
         except Exception:
             continue
         scenes = p.get("scenes", [])
@@ -106,6 +148,7 @@ def create(name: str, story: str = "", *, engine: str | None = None,
         pid, i = f"{base}-{i}", i + 1
 
     engine_key = engine or engines.default_engine_key()
+    voice_key = engines.default_voice_key()
     project = {
         "id": pid,
         "name": name.strip() or pid,
@@ -121,11 +164,18 @@ def create(name: str, story: str = "", *, engine: str | None = None,
         "engine": engine_key,
         "params": engines.defaults_for(engine_key),
         "scene_count": scene_count,
-        "narration": {"voice": "", "seconds_per_scene": 8, "mode": "per-scene"},
+        "narration": {
+            "voice": "",                     # narrator tone, fed to Claude
+            "seconds_per_scene": config.DEFAULT_SECONDS_PER_SCENE,
+            "mode": "per-scene",
+            # Which TTS model speaks the script, and how.
+            "voice_engine": voice_key,
+            "voice_params": engines.defaults_for(voice_key, engines.SECTION_VOICES),
+        },
         "scenes": [],
-        "spend": {"images": 0, "actual": 0.0},
+        "spend": {"images": 0, "lines": 0, "actual": 0.0},
     }
-    for d in (images_dir(pid), narration_dir(pid), export_dir(pid)):
+    for d in (images_dir(pid), narration_dir(pid), audio_dir(pid), export_dir(pid)):
         d.mkdir(parents=True, exist_ok=True)
     _write_json(project_file(pid), project)
     _write_json(manifest_file(pid), {})
@@ -136,7 +186,7 @@ def load(pid: str) -> dict:
     pf = project_file(pid)
     if not pf.is_file():
         raise FileNotFoundError(f"no project {pid!r}")
-    return json.loads(pf.read_text(encoding="utf-8"))
+    return _read_json(pf)
 
 
 def save(project: dict) -> dict:
@@ -167,7 +217,7 @@ def record_asset(pid: str, entry: dict) -> None:
     with _lock_for(pid + "::manifest"):
         path = manifest_file(pid)
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = _read_json(path)
         except Exception:
             data = {}
         data[entry["key"]] = entry
@@ -202,6 +252,40 @@ def manifest_entry(pid: str, scene: dict, project: dict, *, engine_model: str,
         "generation_id": generation_id,
         "source_url": source_url,
         "cost": cost,
+        "created_at": now(),
+        "selected": True,
+    }
+
+
+def narration_manifest_entry(pid: str, scene: dict, project: dict, *, voice_key: str,
+                             model: str, text: str, params: dict,
+                             generation_id: str | None, file_name: str, cost,
+                             seconds: float | None, measured: bool,
+                             source_url: str | None) -> dict:
+    """Provenance for one spoken line, alongside the image record for the scene.
+
+    `seconds` is the number every downstream step depends on, so the manifest
+    records whether it was measured off the delivered bytes or fell back to the
+    word-count estimate.
+    """
+    return {
+        "key": narration_key(pid, scene["n"], scene["slug"]),
+        "kind": "narration",
+        "project": pid,
+        "scene": scene["n"],
+        "slug": scene["slug"],
+        "title": scene.get("title", ""),
+        "voice_engine": voice_key,
+        "model": model,
+        "params": params,
+        "text": text,
+        "language": (project.get("language") or {}).get("code", ""),
+        "file": file_name,
+        "generation_id": generation_id,
+        "source_url": source_url,
+        "cost": cost,
+        "seconds": seconds,
+        "seconds_measured": measured,
         "created_at": now(),
         "selected": True,
     }
@@ -254,12 +338,22 @@ def export(pid: str, project: dict, *, flatten: bool = True) -> dict:
         dest = edir / (stem + src.suffix)
         shutil.copy2(src, dest)
 
-        row = {"scene": scene["n"], "image": dest.name, "narration": ""}
+        row = {"scene": scene["n"], "image": dest.name, "narration": "",
+               "audio": "", "seconds": scene.get("audio_seconds")}
         text = (scene.get("narration") or "").strip()
         if text:
             nfile = edir / (stem + ".txt")
             nfile.write_text(text + "\n", encoding="utf-8")
             row["narration"] = nfile.name
+
+        # Voice travels under the image's stem, so an editor pairs them on sight.
+        spoken = scene.get("audio")
+        if spoken:
+            asrc = audio_dir(pid) / spoken
+            if asrc.is_file():
+                adest = edir / (audio_stem(pid, scene["n"], scene["slug"]) + asrc.suffix)
+                shutil.copy2(asrc, adest)
+                row["audio"] = adest.name
         rows.append(row)
 
     from .narration import full_script
