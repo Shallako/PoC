@@ -14,3 +14,10 @@ __pycache__/
 
 # Generated run output (images, narration, manifests, exports)
 projects/
+
+# Editor / OS local config
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
