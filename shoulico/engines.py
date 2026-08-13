@@ -118,6 +118,67 @@ SECTION_VOICES = "voices"
 # would be wrong for both a two-word beat and a long paragraph.
 CHARS_PER_PRICE_UNIT = 1000
 
+# ElevenLabs identifies a voice by an opaque voice_id, never by its display name:
+# sending "George" earns `A voice with voice_id 'George' was not found`. Renderful
+# forwards the `voice` parameter through untouched, so the id is what we store.
+#
+# Read from https://api.elevenlabs.io/v1/voices (public, unauthenticated) on
+# 2026-08-13 -- the premade library every account gets. It is generated data, not
+# remembered data, which is the point: the first version of this list was written
+# from the model's marketing page and three of its six names had already been
+# retired from the library.
+#
+# The label is what the dropdown shows; the key is what goes on the wire.
+VOICE_LIBRARY: dict[str, str] = {
+    "pNInz6obpgDQGcFmaJgB": "Adam · american male · dominant, firm",
+    "Xb7hH8MSUJpSbSDYk0k2": "Alice · british female · clear, engaging educator",
+    "hpp4J3VqNfWAUOO0d1Us": "Bella · american female · professional, bright, warm",
+    "pqHfZKP75CvOlQylNhV4": "Bill · american male · wise, mature, balanced",
+    "nPczCjzI2devNBz1zQrb": "Brian · american male · deep, resonant and comforting",
+    "N2lVS1w4EtoT3dr4eOWO": "Callum · american male · husky trickster",
+    "IKne3meq5aSn9XLyUdCD": "Charlie · australian male · deep, confident, energetic",
+    "iP95p4xoKVk53GoZ742B": "Chris · american male · charming, down-to-earth",
+    "onwK4e9ZLuTAKqWW03F9": "Daniel · british male · steady broadcaster",
+    "cjVigY5qzO86Huf0OWal": "Eric · american male · smooth, trustworthy",
+    "JBFqnCBsd6RMkjVDRZzb": "George · british male · warm, captivating storyteller",
+    "SOYHLrjzK2X1ezoPC6cr": "Harry · american male · fierce warrior",
+    "cgSgspJ2msm6clMCkdW9": "Jessica · american female · playful, bright, warm",
+    "FGY2WhTYpPnrIDTdsKH5": "Laura · american female · enthusiast, quirky attitude",
+    "TX3LPaxmHKxFdv7VOQHJ": "Liam · american male · energetic, social media creator",
+    "pFZP5JQG7iQjIQuC4Bku": "Lily · british female · velvety actress",
+    "XrExE9yKIg1WjnnlVkGX": "Matilda · american female · knowledgable, professional",
+    "SAz9YHcvj6GT2YYXdXww": "River · american · relaxed, neutral, informative",
+    "CwhRBWXzGAHq8TQ4Fs17": "Roger · american male · laid-back, casual, resonant",
+    "EXAVITQu4vr4xnSDxMaL": "Sarah · american female · mature, reassuring, confident",
+    "bIHbv24MWmeRgasZH58o": "Will · american male · relaxed optimist",
+}
+
+# A storyteller for a storytelling app.
+DEFAULT_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb"
+
+# The display names this app shipped as voice options before the ids were known.
+# Every one of them was rejected by the API, so no project has ever produced audio
+# under any of them and no working choice is being overridden here. George, Adam
+# and Bella map to themselves; Rachel, Josh and Arnold no longer exist in the
+# premade library at all, and fall back to the default rather than leaving a
+# stored project permanently unable to validate.
+LEGACY_VOICE_NAMES: dict[str, str] = {
+    "George": "JBFqnCBsd6RMkjVDRZzb",
+    "Adam": "pNInz6obpgDQGcFmaJgB",
+    "Bella": "hpp4J3VqNfWAUOO0d1Us",
+    "Rachel": DEFAULT_VOICE_ID,
+    "Josh": DEFAULT_VOICE_ID,
+    "Arnold": DEFAULT_VOICE_ID,
+}
+
+# Bump when a shipped voice entry's own data is wrong and the copy already written
+# to engines.json has to be repaired. v1 shipped display names as voice options.
+VOICE_SCHEMA_VERSION = 2
+
+# Labels read "Name · accent gender · character"; the name alone identifies the
+# voice in an error message without printing 21 opaque ids.
+LABEL_SEPARATOR = " · "
+
 # Voice registry. Only eleven_flash_v2_5 has been put through a live account
 # (generation tro5R9t8qky565RboWR6, 2026-08-13). The individual voice, speed and
 # stability values below are declared from the model's published schema and have
@@ -134,16 +195,21 @@ DEFAULT_VOICES: dict[str, Any] = {
         "price_note": "Derived, not guessed: a live 70-character line on 2026-08-13 "
                       "billed 0.0035, i.e. $0.05 per 1000 characters. The real charge "
                       "comes back on the response and is stored in manifest.json.",
+        "schema_version": VOICE_SCHEMA_VERSION,
         "notes": [
-            "Proven: model id and prompt. Unproven: voice, speed, stability, "
-            "similarity_boost and output_format values -- synthesise one line first.",
+            "Proven: model id, prompt and voice id. Unproven: speed, stability and "
+            "similarity_boost values -- synthesise one line before a batch.",
             "Leave the language code blank to follow the story's own language.",
+            "Voices are the premade library every ElevenLabs account gets. To use a "
+            "cloned voice, add its id and a label to the voice input in engines.json.",
         ],
         "inputs": [
             {
                 "key": "voice", "label": "Voice", "type": "enum",
-                "options": ["George", "Rachel", "Adam", "Bella", "Josh", "Arnold"],
-                "default": "George",
+                "options": list(VOICE_LIBRARY),
+                "labels": dict(VOICE_LIBRARY),
+                "aliases": dict(LEGACY_VOICE_NAMES),
+                "default": DEFAULT_VOICE_ID,
             },
             {
                 "key": "language_code", "label": "Language code (blank = follow the story)",
@@ -172,9 +238,13 @@ DEFAULT_VOICES: dict[str, Any] = {
         "price_per_1k_chars": 0.06,
         "price_note": "Unverified. Priced from the listing's floor ($0.06). Synthesise "
                       "one line and read the real charge off the response before a batch.",
+        "schema_version": VOICE_SCHEMA_VERSION,
         "notes": [
             "Unverified engine: synthesise one line first, then the batch.",
             "Parameter names are assumed to match the ElevenLabs family and may differ.",
+            "No voice picker: MiniMax uses its own voice ids, not ElevenLabs', and "
+            "guessing them is the mistake that made every ElevenLabs voice fail. "
+            "The account default speaks until one is confirmed live.",
         ],
         "inputs": [
             {
@@ -197,6 +267,17 @@ class ParamError(ValueError):
     """A parameter that the engine schema rejects. Never reaches the API."""
 
 
+def _option_names(spec: dict) -> list[str]:
+    """Enum options as a human would name them, for error messages.
+
+    A voice id carries no meaning on its own, so an error listing 21 of them
+    tells the reader nothing. Options with no label print as themselves, which
+    is what every image engine wants.
+    """
+    labels = spec.get("labels") or {}
+    return [str(labels.get(o, o)).split(LABEL_SEPARATOR)[0] for o in spec["options"]]
+
+
 def _migrate(reg: dict) -> tuple[dict, bool]:
     """Add registry sections a hand-written engines.json predates.
 
@@ -211,6 +292,18 @@ def _migrate(reg: dict) -> tuple[dict, bool]:
     if "default_voice" not in reg:
         reg["default_voice"] = config.DEFAULT_VOICE
         changed = True
+
+    # Repair a shipped voice whose own data was wrong. Filling in a missing
+    # section is not enough here: the broken voice list had already been written
+    # to disk, so leaving the file alone would leave it broken forever. Only
+    # voices this app ships are touched, and only when the version they were
+    # written at is behind the current one -- a voice the user added themselves
+    # has no shipped counterpart and is never rewritten.
+    for key, shipped in DEFAULT_VOICES.items():
+        have = reg[SECTION_VOICES].get(key)
+        if have is None or have.get("schema_version", 1) < shipped["schema_version"]:
+            reg[SECTION_VOICES][key] = json.loads(json.dumps(shipped))
+            changed = True
     return reg, changed
 
 
@@ -280,9 +373,16 @@ def validate(key: str, params: dict | None, section: str = SECTION_ENGINES) -> d
         kind = spec["type"]
 
         if kind == "enum":
+            # A value this app used to ship still sits in saved projects. Resolve
+            # it here, at the one place every stored parameter passes through,
+            # so an old project loads instead of being stuck: the settings
+            # endpoint revalidates what it read back, and would reject its own
+            # stored value with no way for the user to correct it.
+            value = (spec.get("aliases") or {}).get(value, value)
             if value not in spec["options"]:
                 raise ParamError(
-                    f"{spec['label']}: {value!r} is not one of {', '.join(spec['options'])}"
+                    f"{spec['label']}: {value!r} is not one of "
+                    f"{', '.join(_option_names(spec))}"
                 )
             out[k] = value
 

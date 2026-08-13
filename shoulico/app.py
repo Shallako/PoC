@@ -155,6 +155,23 @@ def _decorate(project: dict) -> dict:
         })
     out = dict(project)
     out["scenes"] = scenes
+    # Show the browser the values that would actually be sent. A project saved
+    # under an older voice name still holds it, and a control whose stored value
+    # matches no option silently displays the first one instead -- so the page
+    # would name a different voice than the run would use. Resolving is enough;
+    # the next save persists it. Anything validate rejects is left alone so the
+    # settings endpoint can report it rather than this one swallowing it.
+    narration = project.get("narration") or {}
+    if narration.get("voice_params"):
+        try:
+            out["narration"] = {
+                **narration,
+                "voice_params": engines.validate(
+                    narration.get("voice_engine") or engines.default_voice_key(),
+                    narration["voice_params"], engines.SECTION_VOICES),
+            }
+        except engines.ParamError:
+            pass
     out["job"] = orchestrator.status(project["id"])
     out["audio_job"] = orchestrator.status(project["id"], orchestrator.KIND_AUDIO)
     # Runtime of the finished voice-over: measured where audio exists, estimated

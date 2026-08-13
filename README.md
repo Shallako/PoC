@@ -304,22 +304,40 @@ set). Everything else is unverified until you prove it.
 ## Adding a voice
 
 The same file, under `voices`, with the same schema machinery -- `inputs` drives
-both the controls and validation, and `verified: false` warns before a batch:
+both the controls and validation, and `verified: false` warns before a batch.
+
+**A voice is an id, never a name.** ElevenLabs resolves `voice` only as an opaque
+`voice_id`; a display name passes our validation, is accepted by Renderful, and
+is rejected by the provider on the one hop that bills. So the enum's options are
+ids and a `labels` map carries the human reading:
 
 ```json
 {"key": "voice", "label": "Voice", "type": "enum",
- "options": ["George", "Rachel", "Adam", "Bella", "Josh", "Arnold"],
- "default": "George"}
+ "options": ["JBFqnCBsd6RMkjVDRZzb", "EXAVITQu4vr4xnSDxMaL"],
+ "labels": {"JBFqnCBsd6RMkjVDRZzb": "George · british male · warm storyteller",
+            "EXAVITQu4vr4xnSDxMaL": "Sarah · american female · reassuring"},
+ "default": "JBFqnCBsd6RMkjVDRZzb"}
 ```
 
-An `engines.json` written before voices existed gains the section on first load;
-the image engines in it are left exactly as they were. `GET /api/v1/models?type=
-text-to-audio` on your own account lists what else you could put here -- there
-were ten when this was written, across ElevenLabs and MiniMax.
+`labels` is optional and general: an enum without it renders its values, exactly
+as the image engines always have. To use a **cloned** voice, add its id and a
+label here. The 21 shipped ids are the premade library, read from
+`https://api.elevenlabs.io/v1/voices` -- public, no key needed, and worth
+re-reading rather than trusting a list: three of the six names this app first
+shipped had already been retired from the library.
 
-Only `eleven_flash_v2_5` has been through a live account, and only its model id
-and prompt. The voice, speed and stability *values* are declared from the
-published schema and unproven -- speak one line before a batch.
+An `engines.json` written before voices existed gains the section on first load,
+and a *shipped* voice whose `schema_version` is behind the current one is
+rewritten in place -- otherwise the bad list written on first run would outlive
+the fix. Voices you add yourself have no shipped counterpart and are never
+touched. `GET /api/v1/models?type=text-to-audio` on your own account lists what
+else you could put here -- there were ten when this was written.
+
+`eleven_flash_v2_5` is live-verified for model id, prompt and voice id. Its
+speed, stability and similarity values are declared from the published schema and
+unproven -- speak one line before a batch. `speech-2.6-turbo` deliberately ships
+*no* voice picker: MiniMax uses its own ids, and guessing them is precisely the
+mistake above.
 
 ## Not built (deliberately)
 
@@ -334,7 +352,7 @@ rather than guesswork.
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 89 offline tests, free
+    .venv\Scripts\python -m pytest             # 98 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 The offline suite drives the real FastAPI app against a fake Renderful HTTP

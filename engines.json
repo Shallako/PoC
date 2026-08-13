@@ -162,9 +162,11 @@
       "verified": true,
       "price_per_1k_chars": 0.05,
       "price_note": "Derived, not guessed: a live 70-character line on 2026-08-13 billed 0.0035, i.e. $0.05 per 1000 characters. The real charge comes back on the response and is stored in manifest.json.",
+      "schema_version": 2,
       "notes": [
-        "Proven: model id and prompt. Unproven: voice, speed, stability, similarity_boost and output_format values -- synthesise one line first.",
-        "Leave the language code blank to follow the story's own language."
+        "Proven: model id, prompt and voice id. Unproven: speed, stability and similarity_boost values -- synthesise one line before a batch.",
+        "Leave the language code blank to follow the story's own language.",
+        "Voices are the premade library every ElevenLabs account gets. To use a cloned voice, add its id and a label to the voice input in engines.json."
       ],
       "inputs": [
         {
@@ -172,14 +174,60 @@
           "label": "Voice",
           "type": "enum",
           "options": [
-            "George",
-            "Rachel",
-            "Adam",
-            "Bella",
-            "Josh",
-            "Arnold"
+            "pNInz6obpgDQGcFmaJgB",
+            "Xb7hH8MSUJpSbSDYk0k2",
+            "hpp4J3VqNfWAUOO0d1Us",
+            "pqHfZKP75CvOlQylNhV4",
+            "nPczCjzI2devNBz1zQrb",
+            "N2lVS1w4EtoT3dr4eOWO",
+            "IKne3meq5aSn9XLyUdCD",
+            "iP95p4xoKVk53GoZ742B",
+            "onwK4e9ZLuTAKqWW03F9",
+            "cjVigY5qzO86Huf0OWal",
+            "JBFqnCBsd6RMkjVDRZzb",
+            "SOYHLrjzK2X1ezoPC6cr",
+            "cgSgspJ2msm6clMCkdW9",
+            "FGY2WhTYpPnrIDTdsKH5",
+            "TX3LPaxmHKxFdv7VOQHJ",
+            "pFZP5JQG7iQjIQuC4Bku",
+            "XrExE9yKIg1WjnnlVkGX",
+            "SAz9YHcvj6GT2YYXdXww",
+            "CwhRBWXzGAHq8TQ4Fs17",
+            "EXAVITQu4vr4xnSDxMaL",
+            "bIHbv24MWmeRgasZH58o"
           ],
-          "default": "George"
+          "labels": {
+            "pNInz6obpgDQGcFmaJgB": "Adam · american male · dominant, firm",
+            "Xb7hH8MSUJpSbSDYk0k2": "Alice · british female · clear, engaging educator",
+            "hpp4J3VqNfWAUOO0d1Us": "Bella · american female · professional, bright, warm",
+            "pqHfZKP75CvOlQylNhV4": "Bill · american male · wise, mature, balanced",
+            "nPczCjzI2devNBz1zQrb": "Brian · american male · deep, resonant and comforting",
+            "N2lVS1w4EtoT3dr4eOWO": "Callum · american male · husky trickster",
+            "IKne3meq5aSn9XLyUdCD": "Charlie · australian male · deep, confident, energetic",
+            "iP95p4xoKVk53GoZ742B": "Chris · american male · charming, down-to-earth",
+            "onwK4e9ZLuTAKqWW03F9": "Daniel · british male · steady broadcaster",
+            "cjVigY5qzO86Huf0OWal": "Eric · american male · smooth, trustworthy",
+            "JBFqnCBsd6RMkjVDRZzb": "George · british male · warm, captivating storyteller",
+            "SOYHLrjzK2X1ezoPC6cr": "Harry · american male · fierce warrior",
+            "cgSgspJ2msm6clMCkdW9": "Jessica · american female · playful, bright, warm",
+            "FGY2WhTYpPnrIDTdsKH5": "Laura · american female · enthusiast, quirky attitude",
+            "TX3LPaxmHKxFdv7VOQHJ": "Liam · american male · energetic, social media creator",
+            "pFZP5JQG7iQjIQuC4Bku": "Lily · british female · velvety actress",
+            "XrExE9yKIg1WjnnlVkGX": "Matilda · american female · knowledgable, professional",
+            "SAz9YHcvj6GT2YYXdXww": "River · american · relaxed, neutral, informative",
+            "CwhRBWXzGAHq8TQ4Fs17": "Roger · american male · laid-back, casual, resonant",
+            "EXAVITQu4vr4xnSDxMaL": "Sarah · american female · mature, reassuring, confident",
+            "bIHbv24MWmeRgasZH58o": "Will · american male · relaxed optimist"
+          },
+          "aliases": {
+            "George": "JBFqnCBsd6RMkjVDRZzb",
+            "Adam": "pNInz6obpgDQGcFmaJgB",
+            "Bella": "hpp4J3VqNfWAUOO0d1Us",
+            "Rachel": "JBFqnCBsd6RMkjVDRZzb",
+            "Josh": "JBFqnCBsd6RMkjVDRZzb",
+            "Arnold": "JBFqnCBsd6RMkjVDRZzb"
+          },
+          "default": "JBFqnCBsd6RMkjVDRZzb"
         },
         {
           "key": "language_code",
@@ -225,9 +273,11 @@
       "verified": false,
       "price_per_1k_chars": 0.06,
       "price_note": "Unverified. Priced from the listing's floor ($0.06). Synthesise one line and read the real charge off the response before a batch.",
+      "schema_version": 2,
       "notes": [
         "Unverified engine: synthesise one line first, then the batch.",
-        "Parameter names are assumed to match the ElevenLabs family and may differ."
+        "Parameter names are assumed to match the ElevenLabs family and may differ.",
+        "No voice picker: MiniMax uses its own voice ids, not ElevenLabs', and guessing them is the mistake that made every ElevenLabs voice fail. The account default speaks until one is confirmed live."
       ],
       "inputs": [
         {

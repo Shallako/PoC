@@ -8,6 +8,8 @@ frame stream, so `shoulico.audio` is measured against actual bytes.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from conftest import audio_files, project, segmented, speak, wait_for_job
 from fake_renderful import AUDIO_TYPE, mp3_seconds, silent_mp3
@@ -123,7 +125,11 @@ def test_the_payload_is_a_speech_job_and_carries_no_image_parameters(client, cla
     assert len(sent) == 1
     assert sent[0]["model"] == config.DEFAULT_VOICE
     assert sent[0]["prompt"].startswith("Line 1.")
-    assert sent[0]["voice"] == "George"
+    # An opaque voice id, never a display name: ElevenLabs answers a name with
+    # "A voice with voice_id 'George' was not found", and it answers it after
+    # the request has been accepted.
+    assert sent[0]["voice"] == engines.DEFAULT_VOICE_ID
+    assert sent[0]["voice"] in engines.VOICE_LIBRARY
     # An aspect ratio means nothing to a speech model, and a rejected request bills.
     for image_only in ("aspect_ratio", "resolution", "num_outputs", "output_format"):
         assert image_only not in sent[0]
@@ -280,6 +286,92 @@ def test_the_voice_registry_is_offered_to_the_browser(client):
     assert voices["default"] == config.DEFAULT_VOICE
     assert voices["voices"][config.DEFAULT_VOICE]["verified"] is True
     assert voices["voices"]["speech-2.6-turbo"]["verified"] is False
+
+
+def test_every_offered_voice_is_an_id_rather_than_a_display_name(client):
+    """The bug this guards shipped once and cost a paid request to discover.
+
+    Renderful forwards `voice` to ElevenLabs untouched, and ElevenLabs resolves
+    only opaque ids. A display name is accepted by our own validation, accepted
+    by Renderful, and rejected by the provider -- the one place that costs money.
+    """
+    spec = next(i for i in client.get("/api/voices").json()
+                ["voices"][config.DEFAULT_VOICE]["inputs"] if i["key"] == "voice")
+
+    assert spec["options"], "a voice picker with no voices is not a picker"
+    for option in spec["options"]:
+        assert option in engines.VOICE_LIBRARY, option
+        assert option not in engines.LEGACY_VOICE_NAMES, option
+        # The label carries the human name, so the value never has to.
+        assert spec["labels"][option].split(engines.LABEL_SEPARATOR)[0] != option
+
+    # Every option is labelled, or the dropdown reads as 21 lines of noise.
+    assert set(spec["labels"]) >= set(spec["options"])
+    assert spec["default"] in spec["options"]
+
+
+@pytest.mark.parametrize("legacy", sorted(engines.LEGACY_VOICE_NAMES))
+def test_a_project_saved_with_an_old_voice_name_still_loads(client, claude, legacy):
+    """Old display names sit in saved projects and must not strand them.
+
+    The settings endpoint revalidates the params it reads back, so a stored
+    value it rejects cannot be corrected through the UI -- picking a voice
+    replays the same broken params and fails again.
+    """
+    resolved = engines.validate(config.DEFAULT_VOICE, {"voice": legacy},
+                                engines.SECTION_VOICES)["voice"]
+    assert resolved in engines.VOICE_LIBRARY
+
+    pid = segmented(client, scenes=1)
+    store.mutate(pid, lambda p: p["narration"].update({"voice_params": {"voice": legacy}}))
+
+    r = client.post(f"/api/projects/{pid}/narration/voice", json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["narration"]["voice_params"]["voice"] == resolved
+
+
+def test_the_page_is_shown_the_voice_the_run_would_use(client, claude):
+    """A stored value matching no option makes a select display the first one.
+
+    That is worse than an error: the page would name one voice while the run
+    used another, and nothing anywhere would look wrong.
+    """
+    pid = segmented(client, scenes=1)
+    store.mutate(pid, lambda p: p["narration"].update({"voice_params": {"voice": "George"}}))
+
+    shown = client.get(f"/api/projects/{pid}").json()["narration"]["voice_params"]["voice"]
+    assert shown == engines.LEGACY_VOICE_NAMES["George"]
+
+    spec = next(i for i in client.get("/api/voices").json()
+                ["voices"][config.DEFAULT_VOICE]["inputs"] if i["key"] == "voice")
+    assert shown in spec["options"]
+
+
+def test_a_stale_voice_list_on_disk_is_repaired_not_left_alone(tmp_path, monkeypatch):
+    """engines.json is written on first run, so a bad shipped list persists there.
+
+    Filling in only missing sections would have left every existing install
+    broken for good.
+    """
+    path = tmp_path / "engines.json"
+    stale = json.loads(json.dumps(engines.DEFAULT_REGISTRY))
+    voice = stale["voices"][config.DEFAULT_VOICE]
+    voice["schema_version"] = 1
+    next(i for i in voice["inputs"] if i["key"] == "voice")["options"] = ["George"]
+    stale["voices"]["mine-cloned"] = {"name": "My clone", "inputs": []}
+    path.write_text(json.dumps(stale), encoding="utf-8")
+
+    monkeypatch.setattr(config, "ENGINES_FILE", path)
+    reg = engines.registry(reload=True)
+
+    shipped = next(i for i in reg["voices"][config.DEFAULT_VOICE]["inputs"]
+                   if i["key"] == "voice")
+    assert shipped["options"] == list(engines.VOICE_LIBRARY)
+    assert reg["voices"][config.DEFAULT_VOICE]["schema_version"] == \
+        engines.VOICE_SCHEMA_VERSION
+    # A voice the user added is theirs; repair must not touch it.
+    assert reg["voices"]["mine-cloned"]["name"] == "My clone"
+    assert json.loads(path.read_text(encoding="utf-8")) == reg
 
 
 def test_voice_parameters_are_validated_before_anything_is_spent(client, claude, api):

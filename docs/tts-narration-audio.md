@@ -93,7 +93,7 @@ Model shortlist (`GET /api/v1/models?type=text-to-audio`, 10 available):
 Parameters for the ElevenLabs family, from the model page:
 
 - `prompt` (string, required, max 40 000 chars)
-- `voice` -- George, Rachel, Adam, Bella, Josh, Arnold
+- `voice` -- **an opaque `voice_id`, not a name** (see the correction below)
 - `language_code` -- 32 languages
 - `output_format` -- MP3 128/192/64 kbps, PCM 44.1/24 kHz
 - `stability`, `similarity_boost` (0--1), `speed` (0.25--4.0)
@@ -226,6 +226,53 @@ Three things found on the way that were fixed rather than deferred:
 - `money()` rounds to two decimals, which renders a spoken line as "$0.00". A
   price that reads as free is worse than no price, so `moneyFine()` shows four
   decimals below a cent.
+
+## Correction: voices are ids, not names (2026-08-13)
+
+The parameter list above was read off the model's published page, which names its
+voices George, Rachel, Adam, Bella, Josh and Arnold. Those are display names.
+ElevenLabs resolves `voice` only as an opaque `voice_id`, and Renderful forwards
+the value untouched, so the first real batch failed with:
+
+```
+generation failed: ElevenLabs TTS API error:
+A voice with voice_id 'George' was not found.
+```
+
+Two things made this expensive to catch and cheap to repeat:
+
+- **The failure is on the far side of the money.** Our validation accepted the
+  name, Renderful accepted the request, and only the provider rejected it. No
+  offline test can reach that hop, so the guard has to be on the *shape* of the
+  value: an option must be an id from the library, never a display name.
+- **Half the names were also retired.** Mapping name to id would still have left
+  Rachel, Josh and Arnold failing -- they are no longer in the premade library at
+  all. The list was wrong in two independent ways, which is what a list written
+  from a marketing page is worth.
+
+The fix reads the 21 premade voices from `https://api.elevenlabs.io/v1/voices`
+(public, unauthenticated) and generates the table, so it is derived data rather
+than remembered data -- the same discipline already applied to the price.
+
+Three consequences worth keeping:
+
+- `enum` specs gained an optional `labels` map, so a control can show
+  "George · british male · warm, captivating storyteller" and send
+  `JBFqnCBsd6RMkjVDRZzb`. Specs without labels render exactly as before.
+- `enum` specs gained optional `aliases`, resolved in `validate()`. Saved
+  projects hold the old names, and the settings endpoint revalidates the params
+  it reads back -- so without aliasing, a stored bad value could not be corrected
+  through the UI. Picking a voice would replay the same broken params and fail.
+- `engines.json` is written on first run, so the bad list was already on disk.
+  Filling in missing sections was not enough; shipped voices now carry a
+  `schema_version` and are rewritten when it is behind. Voices the user added are
+  never touched.
+
+Because every option was invalid, no project had ever produced audio, so nothing
+that worked was changed. Verified live: `JBFqnCBsd6RMkjVDRZzb` and
+`EXAVITQu4vr4xnSDxMaL` both returned real MP3s, measured 1.49s and 1.44s, billed
+$0.001 each -- 20 characters at $0.05/1000, confirming the pricing model a third
+time.
 
 ## Follow-ups
 

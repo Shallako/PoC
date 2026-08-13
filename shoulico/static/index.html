@@ -632,8 +632,17 @@ function renderParams(box, inputs, values, onChange) {
     const wrap = document.createElement("div");
     let control;
     if (spec.type === "enum") {
+      // Explicit value: a voice option shows "George · british male · ..." but
+      // must send the opaque id. Without labels the value is the text, exactly
+      // as the image engines have always rendered.
+      const labels = spec.labels || {};
+      // A select whose value matches no option shows the first one, which is a
+      // quiet lie about what will be sent. Fall back to the declared default.
+      const chosen = spec.options.includes(val) ? val : spec.default;
       control = `<select data-param="${spec.key}">` +
-        spec.options.map((o) => `<option ${o === val ? "selected" : ""}>${escapeHtml(o)}</option>`).join("") +
+        spec.options.map((o) =>
+          `<option value="${escapeHtml(String(o))}" ${o === chosen ? "selected" : ""}>` +
+          `${escapeHtml(String(labels[o] ?? o))}</option>`).join("") +
         `</select>`;
     } else if (spec.type === "seed") {
       control = `<input type="text" data-param="${spec.key}" value="${val ?? ""}" placeholder="random">`;
