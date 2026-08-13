@@ -114,6 +114,10 @@ def create(name: str, story: str = "", *, engine: str | None = None,
         "story": story or "",
         "style_hint": "",
         "style_profile": "",
+        # Filled in by segmentation, from the story itself.
+        "language": {"code": "", "name": "", "native_name": ""},
+        "prompt_language": "story",
+
         "engine": engine_key,
         "params": engines.defaults_for(engine_key),
         "scene_count": scene_count,

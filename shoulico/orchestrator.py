@@ -90,15 +90,20 @@ def plan(project: dict, scene_numbers: list[int] | None = None,
         unchanged = on_disk and scene.get("asset_prompt") == prompt
         if unchanged and not force:
             skipped.append({"n": scene["n"], "title": scene.get("title", ""),
+                            "asset": asset, "reason_key": "current",
                             "reason": f"{asset} already matches this prompt"})
         else:
+            key = "forced" if on_disk and force else "changed" if on_disk else "new"
             to_render.append({
                 "n": scene["n"],
                 "title": scene.get("title", ""),
                 "prompt": prompt,
                 "prompt_chars": len(prompt),
-                "reason": ("re-render (forced)" if on_disk and force else
-                           "prompt changed since last render" if on_disk else "not yet rendered"),
+                # reason is the English sentence; reason_key is what the UI localises.
+                "reason_key": key,
+                "reason": {"forced": "re-render (forced)",
+                           "changed": "prompt changed since last render",
+                           "new": "not yet rendered"}[key],
             })
 
     price = engines.price_per_image(engine_key, params)

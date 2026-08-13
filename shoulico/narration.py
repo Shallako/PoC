@@ -7,8 +7,12 @@ the image stem so an editor lines them up automatically.
 
 from __future__ import annotations
 
+import re
+
 from . import config
 from .compiler import _structured_call
+
+_CJK = re.compile(r"[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]")
 
 NARRATION_SCHEMA = {
     "type": "object",
@@ -39,11 +43,16 @@ thing the image cannot say: what it means, what happened before it, what is at s
 - Keep the narrator's voice consistent across every line.
 - No stage directions, no speaker labels, no timecodes, no bracketed notes, no markdown. \
 Only the words to be spoken.
-- Consecutive lines must read as one continuous piece when played back to back."""
+- Consecutive lines must read as one continuous piece when played back to back.
+- Write in the language the story is written in, and write it as that language is \
+actually spoken -- not as a translation of an English line. If a target language is \
+named below, that is the language the story is in; use it. Never answer in English \
+because English is easier."""
 
 
 def generate(story: str, scenes: list[dict], *, voice: str = "",
              seconds_per_scene: int = 8,
+             language: dict | None = None,
              api_key: str | None = None,
              model: str = config.DEFAULT_CLAUDE_MODEL) -> dict[int, str]:
     """Return {scene_ordinal: narration text}."""
@@ -58,10 +67,20 @@ def generate(story: str, scenes: list[dict], *, voice: str = "",
         f"{s['n']}. {s.get('title', '')} — {s.get('beat') or s.get('body', '')[:200]}"
         for s in scenes
     )
+    lang = language or {}
+    lang_name = str(lang.get("name") or "").strip()
+    lang_native = str(lang.get("native_name") or "").strip()
+    label = f"{lang_name} ({lang_native})" if lang_native and lang_native != lang_name else lang_name
+
     user = (
         f"Write one narration line for each of the {len(scenes)} beats below, in order.\n"
         f"Aim for about {words} words per line (roughly {seconds_per_scene} seconds "
-        f"read aloud). Vary the length where the beat calls for it.\n"
+        f"read aloud). Vary the length where the beat calls for it. In a language that is "
+        f"not counted in words the way English is, aim for {seconds_per_scene} seconds of "
+        f"speech instead of a word count.\n"
+        + (f"\nWrite the narration in {label}. That is the language the story is written "
+           f"in, and the language the finished voice-over will be read in.\n"
+           if label else "")
         + (f"\nNarrator voice / tone: {voice.strip()}\n" if voice.strip() else "")
         + f"\n<story>\n{story}\n</story>\n\n<beats>\n{beats}\n</beats>"
     )
@@ -91,8 +110,19 @@ def word_count(text: str) -> int:
     return len((text or "").split())
 
 
+def measure(text: str) -> tuple[int, str, float]:
+    """(count, unit, seconds). Chinese and Japanese do not space their words, so a
+    word count there reads as 1 for a whole line; those are measured in characters."""
+    text = text or ""
+    cjk = len(_CJK.findall(text))
+    if cjk >= 8 and cjk >= word_count(text):
+        return cjk, "characters", round(cjk / config.NARRATION_CPM * 60, 1)
+    words = word_count(text)
+    return words, "words", round(words / config.NARRATION_WPM * 60, 1)
+
+
 def estimate_seconds(text: str) -> float:
-    return round(word_count(text) / config.NARRATION_WPM * 60, 1)
+    return measure(text)[2]
 
 
 def full_script(scenes: list[dict]) -> str:

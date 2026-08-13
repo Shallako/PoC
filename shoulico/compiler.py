@@ -9,7 +9,9 @@ hand-edited, so an edit can't reintroduce a flag the engine reads as text.
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 
 from . import config
 from .naming import slugify
@@ -21,7 +23,17 @@ MJ_FLAGS = re.compile(
     re.IGNORECASE,
 )
 
-_DOUBLE_QUOTED = re.compile(r"[\"“”][^\"“”]{1,200}[\"“”]")
+# Dialogue quoting is language-specific: French uses guillemets, German low/high
+# quotes, Japanese corner brackets. The engine letters any of them onto the image,
+# so all of them have to go. Single quotes are left alone -- across most languages
+# they are apostrophes far more often than they are dialogue.
+_QUOTED_DIALOGUE = re.compile(
+    r"[\"“”][^\"“”]{1,200}[\"“”]"
+    r"|«[^«»]{1,200}»"
+    r"|[„‟][^“”„‟]{1,200}[“”]"
+    r"|「[^「」]{1,200}」"
+    r"|『[^『』]{1,200}』"
+)
 
 
 def strip_mj_flags(text: str) -> str:
@@ -31,8 +43,10 @@ def strip_mj_flags(text: str) -> str:
 
 def strip_quoted_dialogue(text: str) -> str:
     """Quoted dialogue gets rendered as on-image lettering. Drop the quotes."""
-    text = _DOUBLE_QUOTED.sub(" ", text)
-    return re.sub(r"\s{2,}", " ", text).strip(" ,")
+    text = _QUOTED_DIALOGUE.sub(" ", text)
+    # A clause lifted out mid-sentence leaves its commas behind on both sides.
+    text = re.sub(r"\s*([,、，])(\s*[,、，])+", r"\1", text)
+    return re.sub(r"\s{2,}", " ", text).strip(" ,、，")
 
 
 def compile_prompt(body: str, style_block: str, dialect: dict | None = None) -> str:
@@ -55,6 +69,24 @@ def compile_prompt(body: str, style_block: str, dialect: dict | None = None) -> 
 SEGMENT_SCHEMA = {
     "type": "object",
     "properties": {
+        "language": {
+            "type": "object",
+            "description": "The language the story itself is written in.",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "BCP-47 tag, e.g. 'en', 'fr', 'pt-BR', 'ja'. "
+                                   "Include the region only when it changes the wording.",
+                },
+                "name": {"type": "string", "description": "English name, e.g. 'French'."},
+                "native_name": {
+                    "type": "string",
+                    "description": "What that language calls itself, e.g. 'Français'.",
+                },
+            },
+            "required": ["code", "name", "native_name"],
+            "additionalProperties": False,
+        },
         "style_profile": {
             "type": "string",
             "description": "One shared style/consistency block appended to every prompt.",
@@ -74,7 +106,7 @@ SEGMENT_SCHEMA = {
             },
         },
     },
-    "required": ["style_profile", "scenes"],
+    "required": ["language", "style_profile", "scenes"],
     "additionalProperties": False,
 }
 
@@ -108,19 +140,149 @@ The style_profile is that shared block. It carries everything that must stay ide
 across the whole set: art style and rendering, period and setting, recurring character \
 descriptions (build, age, hair, clothing, distinguishing features), casting, wardrobe \
 and prop rules, and any hard "no text in the image" instruction. Write it as flowing \
-prose the engine can read, not as a bullet list."""
+prose the engine can read, not as a bullet list.
+
+Language:
+- Work out which language the story is written in and report it in `language`.
+- Unless you are told otherwise, write everything you produce -- title, beat, prompt and \
+style_profile -- in that same language, in its own idiom and punctuation. The author \
+reads and edits every one of these fields, so they have to come back in the language the \
+author wrote in. Never translate the story into English on the way past.
+- A term the image engine only understands in English (a camera or lens name, a named \
+film stock, an art movement) stays in English inside the otherwise native-language text."""
+
+
+log = logging.getLogger("shoulico.claude")
+
+# 529 "overloaded" is Anthropic-side capacity, not our request. The SDK's own
+# retries are deliberately impatient (sub-second, twice), which is right for a
+# blip and useless for a busy few minutes -- so we ladder on top of them, the
+# way renderful.api_call does for 5xx.
+CLAUDE_ATTEMPTS = 4                    # tries on the requested model
+CLAUDE_BACKOFF = (3, 8, 20)            # seconds before attempts 2, 3, 4
+SDK_RETRIES = 2                        # the SDK's fast retries inside each attempt
+
+
+class ClaudeError(RuntimeError):
+    """A Claude failure that can be explained in a sentence.
+
+    `kind` is what the caller maps to an HTTP status; `status`, `request_id` and
+    `retry_after` are the machine facts, which the UI keeps behind a details
+    toggle so the sentence itself stays readable.
+    """
+
+    def __init__(self, message: str, *, kind: str = "transient",
+                 status: int | None = None, request_id: str | None = None,
+                 retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.status = status
+        self.request_id = request_id
+        self.retry_after = retry_after
 
 
 def _client(api_key: str | None):
     import anthropic
 
-    return anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+    kwargs = {"max_retries": SDK_RETRIES}
+    if api_key:
+        kwargs["api_key"] = api_key
+    return anthropic.Anthropic(**kwargs)
 
 
-def _structured_call(system: str, user: str, schema: dict, api_key: str | None,
-                     model: str, max_tokens: int = 32000) -> dict:
-    """One streamed, schema-constrained Claude call."""
-    client = _client(api_key)
+# --------------------------------------------------------------------------- #
+# Classifying what came back
+#
+# Duck-typed rather than isinstance-based on the SDK's exception classes: an
+# overload can surface either as an HTTP status on the initial request or as an
+# error event mid-stream, and those have not always been the same class. Reading
+# the status and the error type off whatever we caught survives both.
+# --------------------------------------------------------------------------- #
+
+def _status_of(exc) -> int | None:
+    code = getattr(exc, "status_code", None)
+    return code if isinstance(code, int) else None
+
+
+def _error_type(exc) -> str:
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict) and err.get("type"):
+            return str(err["type"])
+    text = str(exc)
+    for marker in ("overloaded_error", "rate_limit_error",
+                   "authentication_error", "permission_error"):
+        if marker in text:
+            return marker
+    return ""
+
+
+def _request_id(exc) -> str | None:
+    rid = getattr(exc, "request_id", None)
+    if rid:
+        return str(rid)
+    match = re.search(r"req_[A-Za-z0-9]+", str(exc))
+    return match.group(0) if match else None
+
+
+def _retry_after(exc) -> float | None:
+    """The server's own answer to "how long?", when it sends one."""
+    try:
+        raw = exc.response.headers.get("retry-after")
+    except Exception:  # noqa: BLE001 - no response, no header, no problem
+        return None
+    try:
+        return max(0.0, min(float(raw), 120.0))
+    except (TypeError, ValueError):
+        return None
+
+
+def classify(exc) -> str:
+    """'overloaded' | 'rate_limit' | 'auth' | 'transient' | 'fatal'."""
+    status, kind = _status_of(exc), _error_type(exc)
+    if status == 529 or kind == "overloaded_error":
+        return "overloaded"
+    if status == 429 or kind == "rate_limit_error":
+        return "rate_limit"
+    if status in (401, 403) or kind in ("authentication_error", "permission_error"):
+        return "auth"
+    if status is not None:
+        return "transient" if status >= 500 or status == 408 else "fatal"
+    name = type(exc).__name__
+    return "transient" if ("Connection" in name or "Timeout" in name) else "fatal"
+
+
+def _explain(exc, kind: str, *, attempts: int, waited: float) -> ClaudeError:
+    """The sentence the user reads instead of a raw SDK exception."""
+    over = f"after {attempts} tries over {round(waited)} seconds"
+    if kind == "overloaded":
+        message = (
+            f"Claude is overloaded right now and turned the request away {over}. "
+            f"Anthropic refused it before the model ran, so nothing was charged. "
+            f"Wait a minute and press the button again."
+        )
+    elif kind == "rate_limit":
+        after = _retry_after(exc)
+        wait = f"{int(after)} seconds" if after else "a minute"
+        message = (
+            f"Your Anthropic account is being rate limited {over}. Nothing was "
+            f"charged for a rejected request. Wait {wait} and try again, or check "
+            f"the limits on your account at console.anthropic.com."
+        )
+    elif kind == "auth":
+        message = (
+            "Anthropic rejected the API key, so nothing was charged. Check "
+            "ANTHROPIC_API_KEY or anthropic_key.txt -- a working key starts with "
+            "'sk-ant-' and has to be active on a workspace with credit."
+        )
+    else:
+        message = f"Claude could not be reached {over}: {exc}"
+    return ClaudeError(message, kind=kind, status=_status_of(exc),
+                       request_id=_request_id(exc), retry_after=_retry_after(exc))
+
+
+def _stream_once(client, system: str, user: str, schema: dict, model: str, max_tokens: int):
     with client.messages.stream(
         model=model,
         max_tokens=max_tokens,
@@ -132,7 +294,56 @@ def _structured_call(system: str, user: str, schema: dict, api_key: str | None,
         system=system,
         messages=[{"role": "user", "content": user}],
     ) as stream:
-        message = stream.get_final_message()
+        return stream.get_final_message()
+
+
+def _call(system: str, user: str, schema: dict, api_key: str | None,
+          model: str, max_tokens: int, meta: dict | None):
+    """Ride out a capacity blip on the requested model, then try the fallback.
+
+    Only capacity and connection failures are retried. A bad request or an
+    unknown error is re-raised untouched -- retrying those burns time and never
+    succeeds, and the caller already reports them verbatim.
+    """
+    client = _client(api_key)
+    plan = [model] * CLAUDE_ATTEMPTS
+    fallback = config.FALLBACK_CLAUDE_MODEL
+    if fallback and fallback != model:
+        plan.append(fallback)
+
+    waited, last, kind = 0.0, None, "transient"
+    for i, attempt_model in enumerate(plan):
+        if i:
+            delay = _retry_after(last) or CLAUDE_BACKOFF[min(i - 1, len(CLAUDE_BACKOFF) - 1)]
+            waited += delay
+            time.sleep(delay)
+        try:
+            message = _stream_once(client, system, user, schema, attempt_model, max_tokens)
+        except Exception as exc:  # noqa: BLE001 - classified on the next line
+            kind, last = classify(exc), exc
+            if kind == "auth":
+                raise _explain(exc, kind, attempts=i + 1, waited=waited) from None
+            if kind == "fatal":
+                raise
+            log.warning("Claude %s from %s (attempt %d of %d): %s",
+                        kind, attempt_model, i + 1, len(plan), exc)
+            continue
+        if meta is not None:
+            meta.update(model=attempt_model, attempts=i + 1,
+                        fell_back=attempt_model != model)
+        if attempt_model != model:
+            log.warning("Claude: %s stayed unavailable, so %s answered instead.",
+                        model, attempt_model)
+        return message
+
+    raise _explain(last, kind, attempts=len(plan), waited=waited) from None
+
+
+def _structured_call(system: str, user: str, schema: dict, api_key: str | None,
+                     model: str, max_tokens: int = 32000,
+                     meta: dict | None = None) -> dict:
+    """One streamed, schema-constrained Claude call, ridden through overloads."""
+    message = _call(system, user, schema, api_key, model, max_tokens, meta)
 
     if message.stop_reason == "refusal":
         details = getattr(message, "stop_details", None)
@@ -154,12 +365,40 @@ def _structured_call(system: str, user: str, schema: dict, api_key: str | None,
     return json.loads(text)
 
 
+DEFAULT_LANGUAGE = {"code": "en", "name": "English", "native_name": "English"}
+
+# Prompts follow the story's language by default (the author has to be able to read
+# and edit them). "en" is the escape hatch for an engine that only behaves in English.
+PROMPT_LANGUAGE_CHOICES = ("story", "en")
+
+_PROMPTS_IN_ENGLISH = (
+    "Exception to the language rule: write `prompt` and `style_profile` in English, "
+    "whatever language the story is in. `title` and `beat` still go in the story's "
+    "language -- those are for the author, not the engine.\n"
+)
+
+
+def normalize_language(raw) -> dict:
+    """Whatever came back from the model, reduced to a usable {code,name,native_name}."""
+    raw = raw if isinstance(raw, dict) else {}
+    code = str(raw.get("code") or "").strip()[:16]
+    name = str(raw.get("name") or "").strip()[:60]
+    if not code and not name:
+        return dict(DEFAULT_LANGUAGE)
+    return {
+        "code": code or "en",
+        "name": name or code,
+        "native_name": str(raw.get("native_name") or "").strip()[:60] or name or code,
+    }
+
+
 def segment(story: str, scene_count: int, *, style_hint: str = "",
             api_key: str | None = None,
             model: str = config.DEFAULT_CLAUDE_MODEL,
             engine_name: str = "Seedream 5.0 Pro",
-            dialect_notes: list[str] | None = None) -> dict:
-    """Return {'style_profile': str, 'scenes': [{n, title, slug, beat, body}]}."""
+            dialect_notes: list[str] | None = None,
+            prompt_language: str = "story") -> dict:
+    """Return {'language','model','fell_back','style_profile','scenes'}."""
     story = (story or "").strip()
     if not story:
         raise ValueError("The story is empty.")
@@ -173,6 +412,7 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
     user = (
         f"Target image engine: {engine_name}.\n"
         + (f"Engine quirks to write around:\n{notes}\n" if notes else "")
+        + (f"\n{_PROMPTS_IN_ENGLISH}" if prompt_language == "en" else "")
         + f"\nSegment this story into exactly {scene_count} visual beats, in story order, "
           f"and write one image prompt for each.\n"
         + (f"\nStyle direction from the author (honour it in style_profile):\n{style_hint.strip()}\n"
@@ -180,7 +420,8 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
         + f"\n<story>\n{story}\n</story>"
     )
 
-    data = _structured_call(SEGMENT_SYSTEM, user, SEGMENT_SCHEMA, api_key, model)
+    meta: dict = {}
+    data = _structured_call(SEGMENT_SYSTEM, user, SEGMENT_SCHEMA, api_key, model, meta=meta)
 
     scenes = []
     for i, raw in enumerate(data.get("scenes", []), start=1):
@@ -199,4 +440,12 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
     if not scenes:
         raise RuntimeError("Claude returned no scenes.")
 
-    return {"style_profile": (data.get("style_profile") or "").strip(), "scenes": scenes}
+    return {
+        "language": normalize_language(data.get("language")),
+        # Which model actually wrote these scenes -- not always the one we asked
+        # for, if the first choice was saturated.
+        "model": meta.get("model") or model,
+        "fell_back": bool(meta.get("fell_back")),
+        "style_profile": (data.get("style_profile") or "").strip(),
+        "scenes": scenes,
+    }

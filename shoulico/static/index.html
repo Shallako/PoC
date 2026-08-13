@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" dir="ltr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -91,25 +91,40 @@
   code{font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
   .muted{color:var(--slate-500)}
   .hidden{display:none}
+  /* "what does this button do" — a question mark that opens a plain explanation */
+  .hlp{width:18px;height:18px;padding:0;border-radius:999px;border:1px solid var(--slate-200);
+       background:var(--slate-100);color:var(--slate-500);font:600 11px/1 inherit;cursor:pointer;
+       vertical-align:middle;margin-inline-start:6px}
+  .hlp:hover{background:var(--blue-50);border-color:var(--blue-200);color:var(--blue-600)}
+  .hlp.on{background:var(--blue-600);border-color:var(--blue-600);color:#fff}
+  .hlp-pop{background:var(--blue-50);border:1px solid var(--blue-200);border-radius:8px;
+           padding:9px 11px;margin:8px 0;color:#1e3a8a;font-size:12.5px;font-weight:400;
+           line-height:1.55;max-width:52em}
+  [dir=rtl] .counter{float:left}
 </style>
 </head>
 <body>
 <header>
   <div class="brand">Shoulico <small>local MVP</small></div>
   <select id="projectPicker" style="width:auto;min-width:200px"></select>
-  <button class="btn ghost sm" id="newProjectBtn">New project</button>
+  <button class="btn ghost sm" id="newProjectBtn" data-i18n="hdr.new">New project</button>
   <div class="spacer"></div>
+  <select id="uiLang" style="width:auto" title="Interface language">
+    <option value="auto" data-i18n="hdr.lang.auto">Interface: story language</option>
+    <option value="en" data-i18n="hdr.lang.en">Interface: English</option>
+  </select>
+  <span class="muted" id="uiLangMsg" style="font-size:12px"></span>
   <span class="chip" id="keyRenderful">Renderful …</span>
   <span class="chip" id="keyAnthropic">Claude …</span>
 </header>
 
 <nav class="steps">
-  <button data-step="1" class="active">1 · Story</button>
-  <button data-step="2">2 · Scenes &amp; prompts</button>
-  <button data-step="3">3 · Render</button>
-  <button data-step="4">4 · Export</button>
+  <button data-step="1" class="active" data-i18n="nav.1">1 · Story</button>
+  <button data-step="2" data-i18n="nav.2">2 · Scenes &amp; prompts</button>
+  <button data-step="3" data-i18n="nav.3">3 · Render</button>
+  <button data-step="4" data-i18n="nav.4">4 · Export</button>
   <div class="spacer"></div>
-  <button class="btn ghost sm" id="deleteProjectBtn">Delete project</button>
+  <button class="btn ghost sm" id="deleteProjectBtn" data-i18n="nav.delete">Delete project</button>
 </nav>
 
 <main>
@@ -118,36 +133,47 @@
   <!-- ------------------------------------------------------- step 1 -->
   <section id="step1">
     <div class="panel">
-      <h2>Story</h2>
-      <p class="hint">Paste the story. Claude segments it into ordered visual beats and writes one
-        engine-targeted prompt per beat, plus a shared style block that keeps the set consistent.</p>
-      <label>Project name</label>
-      <input type="text" id="projName" placeholder="Boston on MV">
-      <label>Story <span class="counter" id="storyCount">0 / 5000</span></label>
-      <textarea id="story" rows="12" placeholder="Paste up to 5,000 characters…"></textarea>
+      <h2 data-i18n="s1.h">Story</h2>
+      <p class="hint" data-i18n="s1.hint">Paste the story in any language. Claude segments it into ordered
+        visual beats and writes one engine-targeted prompt per beat, plus a shared style block that keeps
+        the set consistent. Prompts, titles and narration come back in the language you wrote in.</p>
+      <label><span data-i18n="s1.name">Project name</span></label>
+      <input type="text" id="projName" data-i18n-ph="s1.name.ph" placeholder="Boston on MV">
+      <label><span data-i18n="s1.story">Story</span> <span class="counter" id="storyCount">0 / 5000</span></label>
+      <textarea id="story" rows="12" data-i18n-ph="s1.story.ph" placeholder="Paste up to 5,000 characters…"></textarea>
       <div class="row">
         <div>
-          <label>Number of images</label>
+          <label><span data-i18n="s1.count">Number of images</span></label>
           <input type="number" id="sceneCount" min="1" max="40" value="12">
         </div>
-        <div style="flex:3">
-          <label>Style direction (optional)</label>
-          <input type="text" id="styleHint" placeholder="e.g. bold anime linework, cel-shaded, summer 1992">
+        <div style="flex:2">
+          <label><span data-i18n="s1.style">Style direction (optional)</span></label>
+          <input type="text" id="styleHint" data-i18n-ph="s1.style.ph"
+                 placeholder="e.g. bold anime linework, cel-shaded, summer 1992">
+        </div>
+        <div>
+          <label><span data-i18n="s1.promptLang">Prompt language</span><button type="button" class="hlp"
+                  data-help="help.promptLang" aria-label="?">?</button></label>
+          <select id="promptLang">
+            <option value="story" data-i18n="s1.promptLang.story">Same as the story</option>
+            <option value="en" data-i18n="s1.promptLang.en">English</option>
+          </select>
         </div>
       </div>
+      <div class="muted" id="detectedLang" style="margin-top:10px;font-size:12.5px"></div>
     </div>
 
     <div class="panel">
-      <h2>Engine</h2>
-      <p class="hint">Parameters are validated against this schema before anything is submitted —
-        Renderful bills a request it later rejects, so a bad value has to fail here, for free.</p>
+      <h2 data-i18n="s1.engine.h">Engine</h2>
+      <p class="hint" data-i18n="s1.engine.hint">Parameters are validated against this schema before anything is
+        submitted — Renderful bills a request it later rejects, so a bad value has to fail here, for free.</p>
       <div class="row" id="engineList"></div>
       <div id="engineNotes"></div>
       <div id="engineParams" class="row"></div>
     </div>
 
     <div class="panel">
-      <button class="btn" id="segmentBtn">Segment with Claude →</button>
+      <button class="btn" id="segmentBtn" data-i18n="s1.segment">Segment with Claude →</button>
       <span class="muted" id="segmentMsg" style="margin-left:10px"></span>
     </div>
   </section>
@@ -155,27 +181,29 @@
   <!-- ------------------------------------------------------- step 2 -->
   <section id="step2" class="hidden">
     <div class="panel">
-      <h2>Shared style block</h2>
-      <p class="hint">Appended to every prompt, after the scene body. Edit freely — it is re-applied
-        to all scenes on save.</p>
+      <h2 data-i18n="s2.style.h">Shared style block</h2>
+      <p class="hint" data-i18n="s2.style.hint">Appended to every prompt, after the scene body. Edit freely — it is
+        re-applied to all scenes on save.</p>
       <textarea id="styleProfile" class="mono" rows="7"></textarea>
     </div>
 
     <div class="panel">
-      <h2>Narration script</h2>
-      <p class="hint">Script only — no synthesis. Per-scene lines are written to text files that share
-        the image filename, so an editor lines the pair up automatically.</p>
+      <h2 data-i18n="s2.narr.h">Narration script</h2>
+      <p class="hint" data-i18n="s2.narr.hint">Script only — no synthesis. Written in the story's language.
+        Per-scene lines are saved to text files that share the image filename, so an editor lines the pair up
+        automatically.</p>
       <div class="row">
         <div style="flex:3">
-          <label>Narrator voice / tone (optional)</label>
-          <input type="text" id="narrVoice" placeholder="e.g. first person, dry, looking back 30 years">
+          <label><span data-i18n="s2.voice">Narrator voice / tone (optional)</span></label>
+          <input type="text" id="narrVoice" data-i18n-ph="s2.voice.ph"
+                 placeholder="e.g. first person, dry, looking back 30 years">
         </div>
         <div>
-          <label>Seconds per scene</label>
+          <label><span data-i18n="s2.secs">Seconds per scene</span></label>
           <input type="number" id="narrSecs" min="2" max="60" value="8">
         </div>
         <div style="align-self:flex-end">
-          <button class="btn ghost" id="narrBtn">Write narration</button>
+          <button class="btn ghost" id="narrBtn" data-i18n="s2.write">Write narration</button>
         </div>
       </div>
       <div class="muted" id="narrTotal" style="margin-top:8px"></div>
@@ -184,7 +212,7 @@
     <div id="sceneList"></div>
 
     <div class="panel">
-      <button class="btn" id="saveScenesBtn">Save edits</button>
+      <button class="btn" id="saveScenesBtn" data-i18n="s2.save">Save edits</button>
       <span class="muted" id="saveMsg" style="margin-left:10px"></span>
     </div>
   </section>
@@ -192,20 +220,22 @@
   <!-- ------------------------------------------------------- step 3 -->
   <section id="step3" class="hidden">
     <div class="panel">
-      <h2>Render</h2>
-      <p class="hint">Only scenes whose compiled prompt differs from the one stored in the manifest are
-        re-rendered. Timestamps are ignored.</p>
+      <h2 data-i18n="s3.h">Render</h2>
+      <p class="hint" data-i18n="s3.hint">Only scenes whose compiled prompt differs from the one stored in the
+        manifest are re-rendered. Timestamps are ignored.</p>
       <div class="row">
-        <div style="flex:0 0 auto"><button class="btn ghost" id="planBtn">Preview cost</button></div>
+        <div style="flex:0 0 auto"><button class="btn ghost" id="planBtn" data-i18n="s3.preview">Preview cost</button></div>
         <div style="flex:0 0 auto">
-          <label style="margin:0"><input type="checkbox" id="forceAll" style="width:auto"> re-render everything</label>
+          <label style="margin:0"><input type="checkbox" id="forceAll" style="width:auto">
+            <span data-i18n="s3.force">re-render everything</span><button type="button" class="hlp"
+              data-help="help.forceAll" aria-label="?">?</button></label>
         </div>
-        <div style="flex:0 0 auto"><button class="btn ghost" id="cancelBtn">Cancel run</button></div>
+        <div style="flex:0 0 auto"><button class="btn ghost" id="cancelBtn" data-i18n="s3.cancel">Cancel run</button></div>
       </div>
       <div id="planOut"></div>
     </div>
     <div class="panel">
-      <h2>Gallery</h2>
+      <h2 data-i18n="s3.gallery">Gallery</h2>
       <div class="grid" id="gallery"></div>
     </div>
   </section>
@@ -213,39 +243,44 @@
   <!-- ------------------------------------------------------- step 4 -->
   <section id="step4" class="hidden">
     <div class="panel">
-      <h2>Export</h2>
-      <p class="hint">Copies the selected render of each scene into <code>export/</code> under
+      <h2 data-i18n="s4.h">Export</h2>
+      <p class="hint" data-i18n="s4.hint">Copies the selected render of each scene into <code>export/</code> under
         flattened, sort-safe names, writes the matching narration text files, and drops a copy of
         <code>manifest.json</code> beside them.</p>
       <label><input type="checkbox" id="flatten" checked style="width:auto">
-        flatten filenames (drop <code>_vNN</code> / <code>_seed</code>)</label>
+        <span data-i18n="s4.flatten">flatten filenames (drop <code>_vNN</code> / <code>_seed</code>)</span></label>
       <p></p>
-      <button class="btn" id="exportBtn">Write export folder</button>
+      <button class="btn" id="exportBtn" data-i18n="s4.write">Write export folder</button>
       <span class="muted" id="exportMsg" style="margin-left:10px"></span>
       <div id="exportOut"></div>
     </div>
     <div class="panel">
-      <h2>Provenance</h2>
-      <p class="hint">One record per asset: engine, seed, params, and the exact prompt that was sent.</p>
-      <button class="btn ghost sm" id="manifestBtn">Show manifest.json</button>
+      <h2 data-i18n="s4.prov.h">Provenance</h2>
+      <p class="hint" data-i18n="s4.prov.hint">One record per asset: engine, seed, params, and the exact prompt
+        that was sent.</p>
+      <button class="btn ghost sm" id="manifestBtn" data-i18n="s4.manifest">Show manifest.json</button>
       <pre class="prompt hidden" id="manifestOut"></pre>
     </div>
   </section>
 </main>
 
 <div class="costbar" id="costbar">
-  <div><span class="muted">Batch</span> <span class="big" id="cbCount">0</span> <span class="muted">images</span></div>
-  <div><span class="muted">Estimated</span> <span class="big" id="cbCost">$0.00</span></div>
-  <div><span class="muted">Spent so far</span> <span class="big" id="cbSpent">$0.00</span></div>
+  <div><span class="muted" data-i18n="cb.batch">Batch</span> <span class="big" id="cbCount">0</span>
+       <span class="muted" data-i18n="cb.images">images</span></div>
+  <div><span class="muted" data-i18n="cb.estimated">Estimated</span> <span class="big" id="cbCost">$0.00</span></div>
+  <div><span class="muted" data-i18n="cb.spent">Spent so far</span> <span class="big" id="cbSpent">$0.00</span></div>
   <div class="spacer"></div>
   <span class="muted" id="cbStatus"></span>
-  <button class="btn spend" id="renderBtn">Render — confirm spend</button>
+  <div style="flex:0 0 auto">
+    <button class="btn spend" id="renderBtn" data-i18n="cb.render">Render — confirm spend</button>
+    <button type="button" class="hlp" data-help="help.renderBatch" aria-label="?">?</button>
+  </div>
 </div>
 
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-let ENGINES = null, P = null, POLL = null;
+let ENGINES = null, STATUS = null, P = null, POLL = null, PLAN = null;
 
 // ------------------------------------------------------------------ fetch
 async function api(path, method = "GET", body) {
@@ -257,18 +292,225 @@ async function api(path, method = "GET", body) {
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { detail: text }; }
-  if (!res.ok) throw new Error((data && data.detail) || res.statusText);
+  if (!res.ok) {
+    const err = new Error((data && data.detail) || res.statusText);
+    // The machine facts travel on the error object, not in the sentence: a
+    // request id is what Anthropic support asks for and noise to everyone else.
+    err.status = res.status;
+    err.requestId = res.headers.get("X-Claude-Request-Id") || "";
+    err.upstream = res.headers.get("X-Claude-Status") || "";
+    err.retryAfter = res.headers.get("Retry-After") || "";
+    throw err;
+  }
   return data;
 }
+// Takes a string or an Error. An Error carrying a Claude request id gets a
+// details toggle under the message instead of a wall of ids in the message.
 function alertBox(msg, kind = "err") {
-  $("alerts").innerHTML = `<div class="${kind}">${escapeHtml(String(msg))}</div>`;
+  const text = msg && msg.message ? msg.message : String(msg);
+  let extra = "";
+  if (msg && msg.requestId) {
+    const bits = [tf("err.reqid", { id: msg.requestId })];
+    if (msg.upstream) bits.push(tf("err.upstream", { status: msg.upstream }));
+    if (msg.retryAfter) bits.push(tf("err.retryAfter", { seconds: msg.retryAfter }));
+    extra = `<details><summary>${escapeHtml(t("err.details"))}</summary>` +
+            `<pre class="prompt">${escapeHtml(bits.join("\n"))}</pre></details>`;
+  }
+  $("alerts").innerHTML = `<div class="${kind}">${escapeHtml(text)}${extra}</div>`;
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 function clearAlerts() { $("alerts").innerHTML = ""; }
 function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function money(n) { return "$" + (Number(n) || 0).toFixed(2); }
+
+// ------------------------------------------------------------------ language
+// The English below is the source of truth. It is posted to /api/ui/strings with
+// the language the story was written in; Claude translates what the server has
+// not cached yet, and the page redraws itself in that language. English is free:
+// it is what the markup already says.
+const DYN = {
+  "key.renderful.found": "Renderful key found",
+  "key.renderful.missing": "Renderful key missing",
+  "key.claude.found": "Claude key found",
+  "key.claude.missing": "Claude key missing",
+  "key.claude.malformed": "Claude key malformed",
+  "lang.detected": "Story language: {language}. Prompts, titles and narration come back in it.",
+  "lang.undetected": "Segment the story and Claude will detect its language.",
+  "ui.lang.working": "translating the interface…",
+  "ui.lang.failed": "interface stays in English: {error}",
+  "ui.lang.partial": "{count} strings could not be translated; those stay in English.",
+  "engine.unverified": "unverified",
+  "engine.price": "~{price} / image",
+  "engine.dialect": "{engine} dialect & guardrails",
+  "scene.none": "No scenes yet — run step 1.",
+  "scene.prompt": "Prompt body",
+  "scene.chars": "{count} chars compiled",
+  "scene.narration": "Narration",
+  "scene.length": "{count} {unit} ≈ {seconds}s",
+  "scene.compiled": "Compiled prompt (what gets sent)",
+  "unit.words": "words",
+  "unit.characters": "characters",
+  "status.pending": "pending",
+  "status.queued": "queued",
+  "status.rendering": "rendering",
+  "status.done": "done",
+  "status.failed": "failed",
+  "status.dirty": "prompt changed",
+  "status.unrendered": "not rendered",
+  "narr.total": "{count} {unit} across {scenes} scenes ≈ {seconds}s of read-aloud time.",
+  "saved": "saved",
+  "writing": "Writing…",
+  "segmenting": "Claude is reading the story…",
+  "gallery.render": "Render this scene · ~{price}",
+  "plan.reason.new": "not yet rendered",
+  "plan.reason.changed": "prompt changed since last render",
+  "plan.reason.forced": "re-render (forced)",
+  "plan.reason.current": "already matches this prompt",
+  "plan.summary": "{count} to render, {skipped} already current. Estimated {estimate} at {price}/image.",
+  "plan.nokey": "No Renderful API key found. Set RENDERFUL_API_KEY or put the key in api_key.txt, then restart.",
+  "plan.unverified": "This engine is marked unverified in engines.json. Render one scene before committing to a batch.",
+  "plan.th.n": "#",
+  "plan.th.scene": "Scene",
+  "plan.th.why": "Why",
+  "cb.inflight": "rendering — {count} in flight",
+  "confirm.render.one": "Send 1 image request to Renderful{cost}?\n\nThis spends real credit.",
+  "confirm.render.many": "Send {count} image requests to Renderful{cost}?\n\nThis spends real credit.",
+  "confirm.cost": " (about {cost})",
+  "confirm.delete": "Delete \"{name}\" and everything in its folder?",
+  "prompt.newProject": "Project name",
+  "prompt.newProject.default": "Untitled story",
+  "err.details": "Technical details",
+  "err.reqid": "Anthropic request id: {id}",
+  "err.upstream": "Anthropic returned HTTP {status}",
+  "err.retryAfter": "Suggested wait: {seconds}s",
+  "s1.fellBack": "{wanted} was overloaded, so {used} wrote these scenes instead. Re-segment later if you want the first model to do it.",
+  "cancel.started": "Cancelling — in-flight images finish first.",
+  "cancel.idle": "Nothing is running.",
+  "job.fatal": "The run stopped early: {error}\n\nRenderful is out of credit or rate limiting the account. Add funds, then render again — scenes that already downloaded are skipped automatically.",
+  "boot.failed": "Could not start: {error}",
+  "boot.nokey": "No Anthropic key found — segmentation and narration are disabled. Set ANTHROPIC_API_KEY or put the key in anthropic_key.txt, then restart.",
+  "export.written": "{count} image(s) written",
+  "export.dir": "Wrote to {dir}",
+  "export.th.n": "#",
+  "export.th.image": "Image",
+  "export.th.narration": "Narration",
+  "help.promptLang": "Scene prompts and the shared style block come back in the language the story is written in, so you can read and edit them. Image engines are trained mostly on English text, so if a prompt in your language renders badly, switch this to English and segment again — titles, beats and the narration script stay in your language either way.",
+  "help.renderScene": "Sends this one scene to {engine} straight away and spends about {price}. No other scene is touched. If the scene already has an image, the new one is saved as a new version (v02, v03…) and the old file stays on disk. You are asked to confirm before anything is spent.",
+  "help.renderBatch": "Renders every scene in the list above: the ones with no image yet, plus any whose prompt changed since it was rendered. Scenes that already match their prompt are skipped, so this never pays twice for the same image. Preview cost shows the exact list first.",
+  "help.forceAll": "Ignores what is already on disk and re-renders every scene, including ones that already match their prompt. Use it after changing the seed or an engine parameter — the prompt is unchanged then, so nothing would be re-rendered otherwise. It costs the full batch again.",
+};
+
+let SOURCE = {};                 // key -> English
+let TRANS = {};                  // key -> translated, for the language in use
+let LANG = { code: "en", dir: "ltr" };
+let UI_MODE = localStorage.getItem("shoulico.ui.lang") || "auto";
+const LANG_CACHE = {};           // code -> server response, so switching back is free
+
+function t(key) {
+  const v = TRANS[key] !== undefined ? TRANS[key] : SOURCE[key];
+  return v === undefined ? key : v;
+}
+function fmt(text, vars) {
+  return String(text).replace(/\{(\w+)\}/g, (m, k) => (k in (vars || {}) ? String(vars[k]) : m));
+}
+function tf(key, vars) { return fmt(t(key), vars); }
+
+function harvestStrings() {
+  document.querySelectorAll("[data-i18n]").forEach((el) => { SOURCE[el.dataset.i18n] = el.innerHTML.trim(); });
+  document.querySelectorAll("[data-i18n-ph]").forEach((el) => { SOURCE[el.dataset.i18nPh] = el.placeholder; });
+  Object.keys(DYN).forEach((k) => { SOURCE[k] = DYN[k]; });
+}
+function applyStatic() {
+  document.querySelectorAll("[data-i18n]").forEach((el) => { el.innerHTML = t(el.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-ph]").forEach((el) => { el.placeholder = t(el.dataset.i18nPh); });
+}
+function isEnglish(code) { return !code || /^en(-|$)/i.test(code); }
+
+function langLabel(lang) {
+  if (!lang || !lang.code) return "";
+  const name = lang.name || lang.code;
+  return lang.native_name && lang.native_name !== name ? `${name} (${lang.native_name})` : name;
+}
+
+function targetLanguage() {
+  if (UI_MODE === "en") return { code: "en" };
+  return (P && P.language && P.language.code) ? P.language : { code: "en" };
+}
+
+async function applyLanguage(force) {
+  const target = targetLanguage();
+  const code = target.code || "en";
+  if (!force && code.toLowerCase() === LANG.code.toLowerCase()) return;
+  $("uiLangMsg").textContent = "";
+
+  if (isEnglish(code)) {
+    TRANS = {}; LANG = { code: "en", dir: "ltr" };
+  } else if (LANG_CACHE[code]) {
+    LANG = LANG_CACHE[code]; TRANS = LANG.strings || {};
+  } else {
+    $("uiLangMsg").textContent = t("ui.lang.working");
+    try {
+      const res = await api("/ui/strings", "POST", {
+        code, name: target.name || "", native_name: target.native_name || "", strings: SOURCE,
+      });
+      LANG_CACHE[code] = res; LANG = res; TRANS = res.strings || {};
+      $("uiLangMsg").textContent = res.missing ? tf("ui.lang.partial", { count: res.missing }) : "";
+    } catch (err) {
+      $("uiLangMsg").textContent = tf("ui.lang.failed", { error: err.message });
+      return;
+    }
+  }
+  document.documentElement.lang = LANG.code;
+  document.documentElement.dir = LANG.dir || "ltr";
+  applyStatic();
+  renderKeys();
+  if (P) renderAll();
+}
+
+// The key chips are written by script, so they have to be redrawn on a language
+// change the way the marked-up strings are.
+function renderKeys() {
+  const keys = (P && P.keys) || (STATUS && STATUS.keys);
+  if (!keys) return;
+  $("keyRenderful").textContent = t(keys.renderful ? "key.renderful.found" : "key.renderful.missing");
+  $("keyRenderful").className = "chip " + (keys.renderful ? "ok" : "bad");
+  const warn = keys.anthropic_warning;
+  $("keyAnthropic").textContent =
+    t(warn ? "key.claude.malformed" : keys.anthropic ? "key.claude.found" : "key.claude.missing");
+  $("keyAnthropic").className = "chip " + (keys.anthropic && !warn ? "ok" : "bad");
+  $("keyAnthropic").title = warn || "";
+}
+
+// ------------------------------------------------------------------ help
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("button.hlp");
+  document.querySelectorAll(".hlp-pop").forEach((pop) => {
+    if (!btn || pop.previousElementSibling !== btn) {
+      if (pop.previousElementSibling) pop.previousElementSibling.classList.remove("on");
+      pop.remove();
+    }
+  });
+  if (!btn) return;
+  e.preventDefault();
+  const open = btn.nextElementSibling && btn.nextElementSibling.classList.contains("hlp-pop");
+  if (open) { btn.nextElementSibling.remove(); btn.classList.remove("on"); return; }
+  const pop = document.createElement("div");
+  pop.className = "hlp-pop";
+  pop.textContent = tf(btn.dataset.help, helpVars());
+  btn.classList.add("on");
+  btn.insertAdjacentElement("afterend", pop);
+});
+function helpVars() {
+  const engine = (ENGINES && P && ENGINES.engines[P.engine]) ? ENGINES.engines[P.engine].name : "the engine";
+  return { engine, price: money(pricePerImage()) };
+}
+function pricePerImage() {
+  if (PLAN && typeof PLAN.price_per_image === "number") return PLAN.price_per_image;
+  if (P && typeof P.price_per_image === "number") return P.price_per_image;
+  return 0;
+}
 
 // ------------------------------------------------------------------ steps
 function goStep(n) {
@@ -288,19 +530,19 @@ function renderEngines() {
   Object.values(ENGINES.engines).forEach((e) => {
     const div = document.createElement("div");
     div.className = "engine" + (P && P.engine === e.key ? " sel" : "");
-    div.innerHTML = `<b>${escapeHtml(e.name)} ${e.verified ? "" : "<span class='chip'>unverified</span>"}</b>
+    div.innerHTML = `<b>${escapeHtml(e.name)} ${e.verified ? "" : `<span class='chip'>${t("engine.unverified")}</span>`}</b>
       <span>${escapeHtml(e.provider)} · ${escapeHtml(e.strength)}</span>
-      <span>~${money(e.price_per_image)} / image</span>`;
+      <span>${tf("engine.price", { price: money(e.price_per_image) })}</span>`;
     div.onclick = async () => {
       try { P = await api(`/projects/${P.id}`, "PATCH", { engine: e.key }); renderAll(); }
-      catch (err) { alertBox(err.message); }
+      catch (err) { alertBox(err); }
     };
     list.appendChild(div);
   });
 
   const eng = ENGINES.engines[P.engine];
   $("engineNotes").innerHTML = eng.dialect_notes.length
-    ? `<details><summary>${escapeHtml(eng.name)} dialect &amp; guardrails</summary>
+    ? `<details><summary>${escapeHtml(tf("engine.dialect", { engine: eng.name }))}</summary>
        <ul class="muted">${eng.dialect_notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul></details>`
     : "";
 
@@ -334,42 +576,63 @@ function renderEngines() {
         params[c.dataset.param] = c.type === "checkbox" ? c.checked : c.value;
       });
       try { P = await api(`/projects/${P.id}`, "PATCH", { params }); clearAlerts(); renderAll(); }
-      catch (err) { alertBox(err.message); }
+      catch (err) { alertBox(err); }
     });
   });
 }
 
 // ------------------------------------------------------------------ scenes
+function statusLabel(s) {
+  if (s.dirty) return { cls: "dirty", text: t("status.dirty") };
+  const key = s.status || "pending";
+  return { cls: key, text: t("status." + key) === "status." + key ? key : t("status." + key) };
+}
+
 function renderScenes() {
   $("styleProfile").value = P.style_profile || "";
   const box = $("sceneList");
   box.innerHTML = "";
   if (!P.scenes.length) {
-    box.innerHTML = `<div class="panel muted">No scenes yet — run step 1.</div>`;
+    box.innerHTML = `<div class="panel muted">${escapeHtml(t("scene.none"))}</div>`;
+    $("narrTotal").textContent = "";
     return;
   }
   P.scenes.forEach((s) => {
     const el = document.createElement("div");
     el.className = "scene";
-    const status = s.dirty ? "dirty" : (s.status || "pending");
-    const label = s.dirty ? "prompt changed" : (s.status || "pending");
+    const st = statusLabel(s);
     el.innerHTML = `
       <header>
         <span class="ord">${String(s.n).padStart(3, "0")}</span>
         <input type="text" data-scene="${s.n}" data-field="title" value="${escapeHtml(s.title || "")}">
-        <span class="status ${status}">${escapeHtml(label)}</span>
+        <span class="status ${st.cls}">${escapeHtml(st.text)}</span>
       </header>
-      <label>Prompt body <span class="counter">${s.prompt_chars} chars compiled</span></label>
+      <label><span>${escapeHtml(t("scene.prompt"))}</span>
+        <span class="counter">${escapeHtml(tf("scene.chars", { count: s.prompt_chars }))}</span></label>
       <textarea class="mono" rows="4" data-scene="${s.n}" data-field="body">${escapeHtml(s.body || "")}</textarea>
-      <label>Narration <span class="counter">${s.narration_words} words ≈ ${s.narration_seconds}s</span></label>
+      <label><span>${escapeHtml(t("scene.narration"))}</span>
+        <span class="counter">${escapeHtml(sceneLength(s))}</span></label>
       <textarea rows="2" data-scene="${s.n}" data-field="narration">${escapeHtml(s.narration || "")}</textarea>
-      <details><summary>Compiled prompt (what gets sent)</summary>
+      <details><summary>${escapeHtml(t("scene.compiled"))}</summary>
         <pre class="prompt">${escapeHtml(s.compiled_prompt)}</pre></details>`;
     box.appendChild(el);
   });
-  const words = P.scenes.reduce((a, s) => a + s.narration_words, 0);
-  $("narrTotal").textContent = words
-    ? `${words} words across ${P.scenes.length} scenes ≈ ${(words / 150 * 60).toFixed(0)}s of read-aloud time.`
+  renderNarrationTotal();
+}
+
+function sceneLength(s) {
+  return tf("scene.length", {
+    count: s.narration_words, unit: t("unit." + (s.narration_unit || "words")),
+    seconds: s.narration_seconds,
+  });
+}
+
+function renderNarrationTotal() {
+  const count = P.scenes.reduce((a, s) => a + (s.narration_words || 0), 0);
+  const seconds = P.scenes.reduce((a, s) => a + (s.narration_seconds || 0), 0);
+  const unit = P.scenes.find((s) => s.narration_unit === "characters") ? "characters" : "words";
+  $("narrTotal").textContent = count
+    ? tf("narr.total", { count, unit: t("unit." + unit), scenes: P.scenes.length, seconds: seconds.toFixed(0) })
     : "";
 }
 
@@ -390,15 +653,19 @@ function renderGallery() {
   P.scenes.forEach((s) => {
     const card = document.createElement("div");
     card.className = "card";
+    const busy = s.status === "rendering" || s.status === "queued";
     const img = s.asset
       ? `<img src="/api/projects/${P.id}/image/${encodeURIComponent(s.asset)}?v=${encodeURIComponent(s.asset)}" alt="">`
-      : `<div class="ph">${escapeHtml(s.status === "rendering" || s.status === "queued" ? (s.detail || s.status) : "not rendered")}</div>`;
-    const status = s.dirty ? "dirty" : (s.status || "pending");
+      : `<div class="ph">${escapeHtml(busy ? (s.detail || t("status." + s.status)) : t("status.unrendered"))}</div>`;
+    const st = statusLabel(s);
     card.innerHTML = `${img}
       <div class="meta">
         <b>${String(s.n).padStart(3, "0")} · ${escapeHtml(s.title || "")}</b>
-        <span class="status ${status}">${escapeHtml(s.dirty ? "prompt changed" : (s.detail || s.status || "pending"))}</span>
-        <div style="margin-top:8px"><button class="btn ghost sm" data-render="${s.n}">Render this scene</button></div>
+        <span class="status ${st.cls}">${escapeHtml(s.dirty ? st.text : (s.detail || st.text))}</span>
+        <div style="margin-top:8px">
+          <button class="btn ghost sm" data-render="${s.n}">${escapeHtml(tf("gallery.render", { price: money(pricePerImage()) }))}</button>
+          <button type="button" class="hlp" data-help="help.renderScene" aria-label="?">?</button>
+        </div>
       </div>`;
     g.appendChild(card);
   });
@@ -412,23 +679,25 @@ async function refreshPlan() {
   if (!P || !P.scenes.length) return;
   try {
     const plan = await api(`/projects/${P.id}/plan`, "POST", { force: $("forceAll").checked });
+    PLAN = plan;
     $("cbCount").textContent = plan.count;
     $("cbCost").textContent = money(plan.estimate);
     $("cbSpent").textContent = money((P.spend && P.spend.actual) || 0);
     $("renderBtn").disabled = plan.count === 0 || !P.keys.renderful;
 
     let html = "";
-    if (!P.keys.renderful)
-      html += `<div class="err">No Renderful API key found. Set RENDERFUL_API_KEY or put the key in api_key.txt, then restart.</div>`;
-    if (!plan.verified_engine)
-      html += `<div class="warn">This engine is marked unverified in engines.json. Render one scene before committing to a batch.</div>`;
+    if (!P.keys.renderful) html += `<div class="err">${escapeHtml(t("plan.nokey"))}</div>`;
+    if (!plan.verified_engine) html += `<div class="warn">${escapeHtml(t("plan.unverified"))}</div>`;
     plan.warnings.forEach((w) => { html += `<div class="warn">${escapeHtml(w)}</div>`; });
-    html += `<div class="note">${plan.count} to render, ${plan.skip.length} already current.
-      Estimated ${money(plan.estimate)} at ${money(plan.price_per_image)}/image.
-      ${escapeHtml(plan.price_note || "")}</div>`;
+    html += `<div class="note">${escapeHtml(tf("plan.summary", {
+      count: plan.count, skipped: plan.skip.length,
+      estimate: money(plan.estimate), price: money(plan.price_per_image),
+    }))} ${escapeHtml(plan.price_note || "")}</div>`;
     if (plan.render.length) {
-      html += `<table><tr><th>#</th><th>Scene</th><th>Why</th></tr>` +
-        plan.render.map((r) => `<tr><td>${r.n}</td><td>${escapeHtml(r.title)}</td><td class="muted">${escapeHtml(r.reason)}</td></tr>`).join("") +
+      html += `<table><tr><th>${escapeHtml(t("plan.th.n"))}</th><th>${escapeHtml(t("plan.th.scene"))}</th>
+        <th>${escapeHtml(t("plan.th.why"))}</th></tr>` +
+        plan.render.map((r) => `<tr><td>${r.n}</td><td>${escapeHtml(r.title)}</td>
+          <td class="muted">${escapeHtml(t("plan.reason." + r.reason_key))}</td></tr>`).join("") +
         `</table>`;
     }
     $("planOut").innerHTML = html;
@@ -437,15 +706,18 @@ async function refreshPlan() {
 
 async function doRender(scenes, force) {
   const n = scenes ? scenes.length : Number($("cbCount").textContent);
-  const cost = scenes ? "" : ` (about ${$("cbCost").textContent})`;
-  if (!confirm(`Send ${n} image request${n === 1 ? "" : "s"} to Renderful${cost}?\n\nThis spends real credit.`)) return;
+  const cost = scenes ? tf("confirm.cost", { cost: money(pricePerImage() * n) })
+                      : tf("confirm.cost", { cost: $("cbCost").textContent });
+  const question = n === 1 ? tf("confirm.render.one", { cost })
+                           : tf("confirm.render.many", { count: n, cost });
+  if (!confirm(question)) return;
   try {
     clearAlerts();
     const res = await api(`/projects/${P.id}/render`, "POST",
       { scenes: scenes || null, force: force ?? $("forceAll").checked, confirm: true });
     if (!res.started) alertBox(res.message, "note");
     startPolling();
-  } catch (err) { alertBox(err.message); }
+  } catch (err) { alertBox(err); }
 }
 
 function startPolling() {
@@ -458,17 +730,14 @@ function startPolling() {
       $("cbSpent").textContent = money((P.spend && P.spend.actual) || 0);
       if (job && job.running) {
         const busy = P.scenes.filter((s) => s.status === "rendering" || s.status === "queued").length;
-        $("cbStatus").textContent = `rendering — ${busy} in flight`;
+        $("cbStatus").textContent = tf("cb.inflight", { count: busy });
       } else {
         $("cbStatus").textContent = "";
         clearInterval(POLL); POLL = null;
-        if (job && job.fatal) alertBox(
-          "The run stopped early: " + job.fatal +
-          "\n\nRenderful is out of credit or rate limiting the account. Add funds, then render again — " +
-          "scenes that already downloaded are skipped automatically.");
+        if (job && job.fatal) alertBox(tf("job.fatal", { error: job.fatal }));
         refreshPlan();
       }
-    } catch (err) { clearInterval(POLL); POLL = null; alertBox(err.message); }
+    } catch (err) { clearInterval(POLL); POLL = null; alertBox(err); }
   }, 2500);
 }
 
@@ -478,8 +747,12 @@ function renderAll() {
   $("story").value = P.story || "";
   $("styleHint").value = P.style_hint || "";
   $("sceneCount").value = P.scene_count || 12;
+  $("promptLang").value = P.prompt_language || "story";
   $("narrVoice").value = (P.narration && P.narration.voice) || "";
   $("narrSecs").value = (P.narration && P.narration.seconds_per_scene) || 8;
+  $("uiLang").value = UI_MODE;
+  const label = langLabel(P.language);
+  $("detectedLang").textContent = label ? tf("lang.detected", { language: label }) : t("lang.undetected");
   updateStoryCount();
   renderEngines(); renderScenes(); renderGallery();
   $("cbSpent").textContent = money((P.spend && P.spend.actual) || 0);
@@ -502,32 +775,27 @@ async function loadProjects(selectId) {
   sel.value = selectId && list.some((p) => p.id === selectId) ? selectId : list[0].id;
   P = await api(`/projects/${sel.value}`);
   renderAll();
+  await applyLanguage();
   return true;
 }
 
 async function boot() {
+  harvestStrings();
   ENGINES = await api("/engines");
-  const status = await api("/status");
-  $("keyRenderful").textContent = "Renderful key " + (status.keys.renderful ? "found" : "missing");
-  $("keyRenderful").className = "chip " + (status.keys.renderful ? "ok" : "bad");
-  const warn = status.keys.anthropic_warning;
-  $("keyAnthropic").textContent =
-    "Claude key " + (warn ? "malformed" : status.keys.anthropic ? "found" : "missing");
-  $("keyAnthropic").className = "chip " + (status.keys.anthropic && !warn ? "ok" : "bad");
-  if (warn) $("keyAnthropic").title = warn;
+  STATUS = await api("/status");
+  renderKeys();
   const have = await loadProjects();
   if (!have) await newProject();
   goStep(1);
+  const warn = STATUS.keys.anthropic_warning;
   if (warn) alertBox(warn, "warn");
-  else if (!status.keys.anthropic)
-    alertBox("No Anthropic key found — segmentation and narration are disabled. " +
-             "Set ANTHROPIC_API_KEY or put the key in anthropic_key.txt, then restart.", "warn");
+  else if (!STATUS.keys.anthropic) alertBox(t("boot.nokey"), "warn");
 }
 
 async function newProject() {
-  const name = prompt("Project name", "Untitled story");
+  const name = prompt(t("prompt.newProject"), t("prompt.newProject.default"));
   if (name === null) return;
-  P = await api("/projects", "POST", { name: name || "Untitled story" });
+  P = await api("/projects", "POST", { name: name || t("prompt.newProject.default") });
   await loadProjects(P.id);
   goStep(1);
 }
@@ -535,26 +803,41 @@ async function newProject() {
 // ------------------------------------------------------------------ wiring
 $("story").addEventListener("input", updateStoryCount);
 $("projectPicker").addEventListener("change", (e) => loadProjects(e.target.value));
-$("newProjectBtn").onclick = () => newProject().catch((e) => alertBox(e.message));
+$("newProjectBtn").onclick = () => newProject().catch((e) => alertBox(e));
 $("deleteProjectBtn").onclick = async () => {
-  if (!confirm(`Delete "${P.name}" and everything in its folder?`)) return;
+  if (!confirm(tf("confirm.delete", { name: P.name }))) return;
   try { await api(`/projects/${P.id}`, "DELETE"); if (!await loadProjects()) await newProject(); }
-  catch (err) { alertBox(err.message); }
+  catch (err) { alertBox(err); }
 };
+$("uiLang").addEventListener("change", async (e) => {
+  UI_MODE = e.target.value;
+  localStorage.setItem("shoulico.ui.lang", UI_MODE);
+  await applyLanguage();
+});
+$("promptLang").addEventListener("change", async (e) => {
+  try { P = await api(`/projects/${P.id}`, "PATCH", { prompt_language: e.target.value }); }
+  catch (err) { alertBox(err); }
+});
 
 $("segmentBtn").onclick = async () => {
   clearAlerts();
-  const btn = $("segmentBtn"); btn.disabled = true; $("segmentMsg").textContent = "Claude is reading the story…";
+  const btn = $("segmentBtn"); btn.disabled = true; $("segmentMsg").textContent = t("segmenting");
   try {
     P = await api(`/projects/${P.id}`, "PATCH", {
       name: $("projName").value, story: $("story").value,
       style_hint: $("styleHint").value, scene_count: Number($("sceneCount").value),
+      prompt_language: $("promptLang").value,
     });
     P = await api(`/projects/${P.id}/segment`, "POST", {
       scene_count: Number($("sceneCount").value), style_hint: $("styleHint").value,
+      prompt_language: $("promptLang").value,
     });
     renderAll(); goStep(2); $("segmentMsg").textContent = "";
-  } catch (err) { alertBox(err.message); $("segmentMsg").textContent = ""; }
+    if (P.claude_fell_back) {
+      alertBox(tf("s1.fellBack", { wanted: STATUS.claude_model, used: P.claude_model }), "warn");
+    }
+    await applyLanguage();
+  } catch (err) { alertBox(err); $("segmentMsg").textContent = ""; }
   finally { btn.disabled = false; }
 };
 
@@ -565,22 +848,22 @@ $("saveScenesBtn").onclick = async () => {
       style_profile: $("styleProfile").value, scenes: collectScenePatch(),
     });
     renderAll();
-    $("saveMsg").textContent = "saved";
+    $("saveMsg").textContent = t("saved");
     setTimeout(() => ($("saveMsg").textContent = ""), 2000);
-  } catch (err) { alertBox(err.message); }
+  } catch (err) { alertBox(err); }
 };
 
 $("narrBtn").onclick = async () => {
   clearAlerts();
-  const btn = $("narrBtn"); btn.disabled = true; btn.textContent = "Writing…";
+  const btn = $("narrBtn"); btn.disabled = true; btn.textContent = t("writing");
   try {
     P = await api(`/projects/${P.id}`, "PATCH", { scenes: collectScenePatch(), style_profile: $("styleProfile").value });
     P = await api(`/projects/${P.id}/narration`, "POST", {
       voice: $("narrVoice").value, seconds_per_scene: Number($("narrSecs").value),
     });
     renderAll();
-  } catch (err) { alertBox(err.message); }
-  finally { btn.disabled = false; btn.textContent = "Write narration"; }
+  } catch (err) { alertBox(err); }
+  finally { btn.disabled = false; btn.textContent = t("s2.write"); }
 };
 
 $("planBtn").onclick = refreshPlan;
@@ -588,20 +871,22 @@ $("forceAll").addEventListener("change", refreshPlan);
 $("renderBtn").onclick = () => doRender(null);
 $("cancelBtn").onclick = async () => {
   try { const r = await api(`/projects/${P.id}/cancel`, "POST");
-        alertBox(r.cancelling ? "Cancelling — in-flight images finish first." : "Nothing is running.", "note"); }
-  catch (err) { alertBox(err.message); }
+        alertBox(r.cancelling ? t("cancel.started") : t("cancel.idle"), "note"); }
+  catch (err) { alertBox(err); }
 };
 
 $("exportBtn").onclick = async () => {
   clearAlerts();
   try {
     const res = await api(`/projects/${P.id}/export`, "POST", { flatten: $("flatten").checked });
-    $("exportMsg").textContent = `${res.files.length} image(s) written`;
-    $("exportOut").innerHTML = `<div class="note">Wrote to <code>${escapeHtml(res.dir)}</code></div>` +
-      `<table><tr><th>#</th><th>Image</th><th>Narration</th></tr>` +
+    $("exportMsg").textContent = tf("export.written", { count: res.files.length });
+    $("exportOut").innerHTML =
+      `<div class="note">${escapeHtml(tf("export.dir", { dir: res.dir }))}</div>` +
+      `<table><tr><th>${escapeHtml(t("export.th.n"))}</th><th>${escapeHtml(t("export.th.image"))}</th>
+        <th>${escapeHtml(t("export.th.narration"))}</th></tr>` +
       res.files.map((f) => `<tr><td>${f.scene}</td><td><code>${escapeHtml(f.image)}</code></td>
         <td><code>${escapeHtml(f.narration || "—")}</code></td></tr>`).join("") + `</table>`;
-  } catch (err) { alertBox(err.message); }
+  } catch (err) { alertBox(err); }
 };
 
 $("manifestBtn").onclick = async () => {
@@ -610,10 +895,10 @@ $("manifestBtn").onclick = async () => {
     const out = $("manifestOut");
     out.classList.remove("hidden");
     out.textContent = JSON.stringify(m, null, 2);
-  } catch (err) { alertBox(err.message); }
+  } catch (err) { alertBox(err); }
 };
 
-boot().catch((e) => alertBox("Could not start: " + e.message));
+boot().catch((e) => alertBox(tf("boot.failed", { error: e.message })));
 </script>
 </body>
 </html>

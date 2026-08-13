@@ -14,6 +14,7 @@ APP_DIR = PKG_DIR.parent                     # holds run.py, engines.json, proje
 PROJECTS_DIR = APP_DIR / "projects"
 ENGINES_FILE = APP_DIR / "engines.json"
 STATIC_DIR = PKG_DIR / "static"
+I18N_DIR = APP_DIR / "i18n"                   # cached UI translations, one file per language
 
 RENDERFUL_API_BASE = "https://api.renderful.ai/api/v1"
 DEFAULT_ENGINE = "seedream-5.0-pro"
@@ -21,11 +22,17 @@ DEFAULT_ENGINE = "seedream-5.0-pro"
 # Claude does the segmentation, prompt compilation and narration script.
 DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 
+# Last resort when the model above keeps answering 529 "overloaded". Opus is the
+# first tier to saturate; Sonnet handles these schema-constrained calls well and
+# is far less likely to be turned away. Set to "" to fail instead of falling back.
+FALLBACK_CLAUDE_MODEL = "claude-sonnet-5"
+
 MAX_STORY_CHARS = 5000                        # FR-101
 DEFAULT_SCENE_COUNT = 12
 MAX_SCENE_COUNT = 40
 WORKERS = 3                                   # concurrent generations
 NARRATION_WPM = 150                           # for duration estimates only
+NARRATION_CPM = 350                           # ditto, for unspaced scripts (zh/ja)
 
 
 def _from_file(*candidates: Path) -> str | None:

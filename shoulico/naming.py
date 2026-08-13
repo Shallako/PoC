@@ -8,14 +8,25 @@ Narration shares the flattened stem so a NLE lines the pair up automatically.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 _SMART_QUOTES = re.compile(r"[‘’“”'\"]")
 
+# Letters NFKD leaves alone, so an accent-folded slug does not silently lose them.
+_FOLD = str.maketrans({"ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "đ": "d",
+                       "ð": "d", "þ": "th", "ł": "l", "ħ": "h", "ı": "i"})
+
 
 def slugify(title: str, limit: int = 60) -> str:
+    """ASCII, lower case, hyphenated. Filenames stay portable whatever the story's
+    language is: accents fold to their base letter, and a title in a script with no
+    Latin form at all (Japanese, Arabic) falls back to `scene` -- the ordinal in the
+    stem is what keeps those unique and in order."""
     s = (title or "").lower()
     s = s.replace("&", " and ")
     s = _SMART_QUOTES.sub("", s)
+    s = unicodedata.normalize("NFKD", s.translate(_FOLD))
+    s = s.encode("ascii", "ignore").decode("ascii")
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
     if len(s) > limit:
         s = s[:limit].rstrip("-")

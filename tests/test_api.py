@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 from conftest import STORY, new_project, project, segmented
-from fake_claude import Reply
-from shoulico import compiler, config, store
+from fake_claude import APIError, Reply, default_segment, overloaded
+from shoulico import compiler, config, i18n, narration, store
 
 
 # --------------------------------------------------------------------- #
@@ -203,6 +203,106 @@ def test_segment_surfaces_claude_failures_without_writing_scenes(client, claude)
     assert project(client, pid)["scenes"] == []
 
 
+# --------------------------------------------------------------------- #
+# Overload (HTTP 529) and the rest of the failure ladder
+# --------------------------------------------------------------------- #
+
+def test_an_overload_is_ridden_out_and_the_call_still_succeeds(client, claude):
+    tries = []
+
+    def busy_at_first(kwargs):
+        tries.append(kwargs["model"])
+        return overloaded() if len(tries) < 3 else default_segment(kwargs)
+
+    claude.segment = busy_at_first
+    pid = new_project(client)
+    r = client.post(f"/api/projects/{pid}/segment", json={"scene_count": 2})
+
+    assert r.status_code == 200, r.text
+    assert tries == [config.DEFAULT_CLAUDE_MODEL] * 3, "it gave up on the first model too early"
+    assert r.json()["claude_fell_back"] is False
+    assert r.json()["claude_model"] == config.DEFAULT_CLAUDE_MODEL
+
+
+def test_a_sustained_overload_falls_back_to_the_other_model(client, claude):
+    def only_the_fallback_answers(kwargs):
+        if kwargs["model"] == config.DEFAULT_CLAUDE_MODEL:
+            return overloaded()
+        return default_segment(kwargs)
+
+    claude.segment = only_the_fallback_answers
+    pid = new_project(client)
+    r = client.post(f"/api/projects/{pid}/segment", json={"scene_count": 2})
+
+    assert r.status_code == 200, r.text
+    p = r.json()
+    assert len(p["scenes"]) == 2
+    assert p["claude_model"] == config.FALLBACK_CLAUDE_MODEL and p["claude_fell_back"] is True
+    # The primary was tried its full allowance before anything else was asked.
+    assert len(claude.calls) == compiler.CLAUDE_ATTEMPTS + 1
+
+
+def test_a_total_overload_is_a_503_that_says_nothing_was_charged(client, claude):
+    claude.segment = lambda kwargs: overloaded("req_011CdzqUtHhQBNhyeJ8EdANk")
+    pid = new_project(client)
+    r = client.post(f"/api/projects/{pid}/segment", json={"scene_count": 2})
+
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    assert "overloaded" in detail and "nothing was charged" in detail
+    assert "req_011" not in detail, "the request id belongs in the header, not the sentence"
+    assert r.headers["retry-after"] == "30"
+    assert r.headers["x-claude-request-id"] == "req_011CdzqUtHhQBNhyeJ8EdANk"
+    assert r.headers["x-claude-status"] == "529"
+    assert project(client, pid)["scenes"] == []
+
+
+def test_a_rate_limit_uses_the_servers_own_retry_after(client, claude):
+    class Limited(APIError):
+        def __init__(self):
+            super().__init__(429, "rate_limit_error", "rate limited")
+            self.response = type("R", (), {"headers": {"retry-after": "7"}})()
+
+    claude.segment = lambda kwargs: Limited()
+    pid = new_project(client)
+    r = client.post(f"/api/projects/{pid}/segment", json={"scene_count": 2})
+
+    assert r.status_code == 503 and r.headers["retry-after"] == "7"
+    assert "rate limited" in r.json()["detail"]
+
+
+def test_a_rejected_key_fails_immediately_instead_of_laddering(client, claude):
+    claude.segment = lambda kwargs: APIError(401, "authentication_error", "invalid x-api-key")
+    pid = new_project(client)
+    r = client.post(f"/api/projects/{pid}/segment", json={"scene_count": 2})
+
+    assert r.status_code == 502 and "rejected the API key" in r.json()["detail"]
+    assert len(claude.calls) == 1, "retrying a bad key wastes the user's time"
+
+
+def test_a_bad_request_is_surfaced_verbatim_and_never_retried(client, claude):
+    claude.segment = lambda kwargs: APIError(400, "invalid_request_error", "max_tokens too large")
+    pid = new_project(client)
+    r = client.post(f"/api/projects/{pid}/segment", json={"scene_count": 2})
+
+    assert r.status_code == 502 and "max_tokens too large" in r.json()["detail"]
+    assert len(claude.calls) == 1
+
+
+def test_narration_and_interface_translation_get_the_same_treatment(client, claude):
+    pid = segmented(client, scenes=2)
+
+    claude.narration = lambda kwargs: overloaded()
+    r = client.post(f"/api/projects/{pid}/narration", json={"seconds_per_scene": 8})
+    assert r.status_code == 503 and "overloaded" in r.json()["detail"]
+
+    claude.ui = lambda kwargs: overloaded()
+    r = client.post("/api/ui/strings",
+                    json={"code": "fr", "name": "French", "strings": {"a": "Render"}})
+    assert r.status_code == 503 and "overloaded" in r.json()["detail"]
+    assert not i18n.load("fr"), "a failed translation must not be cached"
+
+
 def test_oversized_story_is_refused_before_the_call(claude):
     with pytest.raises(ValueError, match="limit is"):
         compiler.segment("x" * (config.MAX_STORY_CHARS + 1), 3)
@@ -242,6 +342,117 @@ def test_narration_requires_scenes_and_clamps_the_pacing(client, claude):
     pid = segmented(client, scenes=1)
     p = client.post(f"/api/projects/{pid}/narration", json={"seconds_per_scene": 900}).json()
     assert p["narration"]["seconds_per_scene"] == 60
+
+
+def test_narration_is_asked_for_in_the_language_of_the_story(client, claude):
+    claude.segment = {
+        "language": {"code": "fr", "name": "French", "native_name": "Français"},
+        "style_profile": "Illustration à la ligne claire.",
+        "scenes": [{"ordinal": 1, "title": "Le quai", "beat": "b",
+                    "prompt": "Plan large du quai à l'aube"}],
+    }
+    pid = segmented(client, scenes=1)
+    assert project(client, pid)["language"]["native_name"] == "Français"
+
+    client.post(f"/api/projects/{pid}/narration", json={})
+    user = claude.last_user_turn()
+    assert "Write the narration in French (Français)" in user
+    assert "Write in the language the story is written in" in claude.last_system()
+
+
+def test_prompt_language_can_be_forced_to_english_and_is_validated(client, claude):
+    pid = new_project(client)
+    client.post(f"/api/projects/{pid}/segment", json={"scene_count": 1})
+    assert "Exception to the language rule" not in claude.last_user_turn()
+
+    client.patch(f"/api/projects/{pid}", json={"prompt_language": "en"})
+    client.post(f"/api/projects/{pid}/segment", json={"scene_count": 1})
+    assert "write `prompt` and `style_profile` in English" in claude.last_user_turn()
+    assert project(client, pid)["prompt_language"] == "en"
+
+    r = client.patch(f"/api/projects/{pid}", json={"prompt_language": "français"})
+    assert r.status_code == 400 and "prompt_language" in r.json()["detail"]
+
+
+def test_a_story_in_any_script_still_gets_portable_filenames(client, claude):
+    claude.segment = {
+        "language": {"code": "ja", "name": "Japanese", "native_name": "日本語"},
+        "style_profile": "アニメ調",
+        "scenes": [{"ordinal": 1, "title": "夜の埠頭", "beat": "b", "prompt": "夜の埠頭"},
+                   {"ordinal": 2, "title": "Café à Montréal", "beat": "b", "prompt": "café"}],
+    }
+    pid = segmented(client, scenes=2)
+    slugs = [s["slug"] for s in project(client, pid)["scenes"]]
+    assert slugs == ["scene", "cafe-a-montreal"]
+    assert all(s.isascii() for s in slugs)
+
+
+def test_unspaced_scripts_are_measured_in_characters_not_words(client, claude):
+    pid = segmented(client, scenes=1)
+    p = client.patch(f"/api/projects/{pid}", json={
+        "scenes": [{"n": 1, "narration": "夏の終わりに私たちは海へ向かった。負けるはずのない賭けだった。"}],
+    }).json()
+    scene = p["scenes"][0]
+    assert scene["narration_unit"] == "characters" and scene["narration_words"] > 20
+    assert scene["narration_seconds"] > 0
+    assert narration.measure("two plain words")[1] == "words"
+
+
+def test_quoted_dialogue_is_stripped_whatever_the_language_quotes_with(client, claude):
+    claude.segment = {
+        "language": {"code": "fr", "name": "French", "native_name": "Français"},
+        "style_profile": "Style partagé.",
+        "scenes": [{"ordinal": 1, "title": "Le quai", "beat": "b",
+                    "prompt": "Deux hommes sur le quai, « Donne les cartes », à l'aube"}],
+    }
+    pid = segmented(client, scenes=1)
+    prompt = project(client, pid)["scenes"][0]["compiled_prompt"]
+    assert "Donne les cartes" not in prompt and "«" not in prompt
+    assert prompt.startswith("Deux hommes sur le quai") and "à l'aube" in prompt
+
+
+# --------------------------------------------------------------------- #
+# Interface language
+# --------------------------------------------------------------------- #
+
+def test_ui_strings_translate_once_and_then_come_from_the_cache(client, claude):
+    body = {"code": "fr", "name": "French", "native_name": "Français",
+            "strings": {"nav.1": "1 · Story", "cb.render": "Render — confirm spend"}}
+    first = client.post("/api/ui/strings", json=body).json()
+    assert first["strings"]["nav.1"] == "[fr] 1 · Story"
+    assert first["dir"] == "ltr" and first["translated"] == 2
+    assert i18n.cache_file("fr").is_file()
+
+    calls = len(claude.calls)
+    again = client.post("/api/ui/strings", json=body).json()
+    assert again["strings"] == first["strings"] and again["translated"] == 0
+    assert len(claude.calls) == calls                      # no second call
+
+    # Editing one English string re-translates that key only.
+    body["strings"]["nav.1"] = "1 · The story"
+    third = client.post("/api/ui/strings", json=body).json()
+    assert third["translated"] == 1 and third["strings"]["nav.1"] == "[fr] 1 · The story"
+
+
+def test_english_ui_never_calls_claude_and_rtl_is_reported(client, claude):
+    r = client.post("/api/ui/strings", json={"code": "en-GB", "strings": {"a": "b"}}).json()
+    assert r == {"code": "en", "dir": "ltr", "strings": {}, "translated": 0, "missing": 0}
+    assert claude.calls == []
+
+    r = client.post("/api/ui/strings",
+                    json={"code": "ar", "name": "Arabic", "strings": {"a": "b"}}).json()
+    assert r["dir"] == "rtl"
+
+    assert client.get("/api/ui/languages").json()["cached"] == ["ar"]
+    assert client.delete("/api/ui/strings/ar").json() == {"forgotten": True}
+    assert client.get("/api/ui/languages").json()["cached"] == []
+
+
+def test_ui_translation_failure_is_a_502_and_leaves_no_cache(client, claude):
+    claude.ui = Reply(text="", stop_reason="end_turn")
+    r = client.post("/api/ui/strings", json={"code": "de", "strings": {"a": "b"}})
+    assert r.status_code == 502 and "translate the interface" in r.json()["detail"]
+    assert not i18n.cache_file("de").is_file()
 
 
 def test_narration_files_share_the_image_stem(client, claude):

@@ -94,6 +94,7 @@ def sandbox(tmp_path, monkeypatch, request):
     # only the projects directory is redirected, so nothing lands in the app dir.
     monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "projects")
     monkeypatch.setattr(config, "ENGINES_FILE", tmp_path / "engines.json")
+    monkeypatch.setattr(config, "I18N_DIR", tmp_path / "i18n")
     monkeypatch.setattr(engines, "_cache", None)          # re-materialise per test
     if not _is_live(request):
         monkeypatch.setattr(config, "renderful_key", lambda: "test-renderful-key")
@@ -102,6 +103,9 @@ def sandbox(tmp_path, monkeypatch, request):
         monkeypatch.setattr(renderful, "RENDERFUL_API_BASE", "http://127.0.0.1:1/api/v1")
         monkeypatch.setattr(renderful, "time", _FastClock())
         monkeypatch.setattr(renderful, "POLL_SECONDS", 0.01)
+        # The Claude retry ladder waits tens of seconds between attempts; the
+        # ladder still runs, it just doesn't cost the suite half a minute.
+        monkeypatch.setattr(compiler, "time", _FastClock())
     yield
     _stop_all_jobs()
     engines._cache = None

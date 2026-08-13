@@ -55,6 +55,7 @@ def test_live_end_to_end(capsys):
         assert r.status_code == 200, r.text
         p = r.json()
         assert [s["n"] for s in p["scenes"]] == [1, 2]
+        assert p["language"]["code"].lower().startswith("en"), p["language"]
         assert len(p["style_profile"]) > 200, "the style block came back too thin to be useful"
         for scene in p["scenes"]:
             assert scene["slug"] and len(scene["body"]) > 80

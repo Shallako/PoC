@@ -37,6 +37,31 @@ class Reply:
         self.stop_details = _StopDetails(refusal_category) if refusal_category else None
 
 
+class APIError(Exception):
+    """Shaped like an anthropic.APIStatusError, which is all the classifier reads.
+
+    Deliberately not a real SDK exception: building one needs an httpx response,
+    and the point of duck-typing the classifier is that it does not care.
+    """
+
+    def __init__(self, status_code: int, error_type: str = "api_error",
+                 message: str = "", request_id: str = "req_fake0001") -> None:
+        super().__init__(
+            f"Error code: {status_code} - {{'type': 'error', 'error': "
+            f"{{'type': '{error_type}', 'message': '{message}'}}, "
+            f"'request_id': '{request_id}'}}"
+        )
+        self.status_code = status_code
+        self.request_id = request_id
+        self.body = {"type": "error",
+                     "error": {"type": error_type, "message": message}}
+
+
+def overloaded(request_id: str = "req_fake0001") -> APIError:
+    """The 529 that sends people to the issue tracker."""
+    return APIError(529, "overloaded_error", "Overloaded", request_id)
+
+
 class _Stream:
     def __init__(self, message) -> None:
         self._message = message
@@ -67,6 +92,7 @@ class FakeClaude:
         self.calls: list[dict] = []
         self.segment = default_segment
         self.narration = default_narration
+        self.ui = default_ui
         self.messages = _Messages(self)
 
     # -- assertions helpers ------------------------------------------- #
@@ -79,13 +105,15 @@ class FakeClaude:
 
     def kind_of(self, call: dict) -> str:
         props = call["output_config"]["format"]["schema"]["properties"]
-        return "segment" if "style_profile" in props else "narration"
+        if "style_profile" in props:
+            return "segment"
+        return "ui" if "items" in props else "narration"
 
     # -- the fake itself ---------------------------------------------- #
 
     def _respond(self, kwargs: dict):
         self.calls.append(kwargs)
-        spec = self.segment if self.kind_of(kwargs) == "segment" else self.narration
+        spec = getattr(self, self.kind_of(kwargs))
         if isinstance(spec, Exception):
             raise spec
         if callable(spec):
@@ -118,6 +146,7 @@ def default_segment(kwargs: dict) -> dict:
     user = kwargs["messages"][0]["content"]
     count = _count_from(user, r"exactly (\d+) visual beats")
     return {
+        "language": {"code": "en", "name": "English", "native_name": "English"},
         "style_profile": STYLE_PROFILE,
         "scenes": [
             {
@@ -130,6 +159,13 @@ def default_segment(kwargs: dict) -> dict:
             for i in range(1, count + 1)
         ],
     }
+
+
+def default_ui(kwargs: dict) -> dict:
+    """Echo every key back with a marker, so a test can tell translated from source."""
+    user = kwargs["messages"][0]["content"]
+    body = json.loads(re.search(r"<strings>\n(.*)\n</strings>", user, re.S).group(1))
+    return {"items": [{"key": k, "text": f"[fr] {v}"} for k, v in body.items()]}
 
 
 def default_narration(kwargs: dict) -> dict:
