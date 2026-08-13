@@ -37,9 +37,9 @@ python -m venv .venv
 | Anthropic | segmentation, prompt writing, narration | `ANTHROPIC_API_KEY` -> `PoC\anthropic_key.txt` -> `Renderful\anthropic_key.txt` -> an `ant auth login` profile |
 
 Both keys are present on this machine (`PoC\api_key.txt` and
-`PoC\anthropic_key.txt`), so all four steps are live. Without an Anthropic key,
+`PoC\anthropic_key.txt`), so all five steps are live. Without an Anthropic key,
 step 1 (segment) and the narration button stay disabled; everything else still
-works, including hand-writing prompts and rendering. A key that is present but
+works, including hand-writing prompts, rendering and speaking. A key that is present but
 does not start with `sk-ant-` is flagged in the UI rather than shown green.
 
 Keys are read on demand, never logged, never sent to the browser, and never
