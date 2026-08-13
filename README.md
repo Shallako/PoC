@@ -262,12 +262,13 @@ a prompt and only that scene re-queues; re-run with nothing changed and nothing 
 spent. "Re-render everything" is an explicit checkbox.
 
 **Seedream guardrails**, applied on every compile including hand edits:
-Midjourney flags (`--ar`, `--v`, `--sref`, `--sw`, ...) are stripped -- the engine reads
-them as literal words; quoted dialogue is stripped -- the engine renders it as
+quoted dialogue is stripped -- the engine renders it as
 lettering on the image, and that covers `"..."`, `«...»`, `„..."` and `「...」`
 so the guard holds in any language; the scene body goes first and the shared style block last,
 because instructions buried at the end of a long style block are partially ignored.
 There is no negative-prompt parameter, so exclusions have to be phrased in words.
+Command-line-style flags (`--ar`, `--v`, ...) are read as literal words by the engine;
+the prompt is passed through as written, so anything you type stays in it.
 
 **Format follows the bytes, not the request.** Renderful has delivered both JPEG
 and PNG regardless of the `output_format` asked for, so the extension comes from

@@ -140,21 +140,33 @@ def test_segment_compiles_scene_body_then_style_block(client, claude):
     assert not first["dirty"]
 
 
-def test_guardrails_strip_flags_and_quoted_dialogue_on_every_compile(client, claude):
+def test_guardrails_strip_quoted_dialogue_on_every_compile(client, claude):
     claude.segment = {
         "style_profile": "Shared style block.",
         "scenes": [{"ordinal": 1, "title": "Deal", "beat": "b",
-                    "prompt": 'Four men at a table, "Deal the cards" --ar 16:9 --v 6'}],
+                    "prompt": 'Four men at a table, "Deal the cards"'}],
     }
     pid = segmented(client, scenes=1)
     prompt = project(client, pid)["scenes"][0]["compiled_prompt"]
-    assert "--" not in prompt and "Deal the cards" not in prompt
+    assert "Deal the cards" not in prompt
     assert prompt == "Four men at a table Shared style block."
 
-    # A hand edit cannot reintroduce them either -- the pass runs on every compile.
+    # A hand edit cannot reintroduce it either -- the pass runs on every compile.
     p = client.patch(f"/api/projects/{pid}",
-                     json={"scenes": [{"n": 1, "body": 'Porch at dusk --stylize 400'}]}).json()
-    assert "--stylize" not in p["scenes"][0]["compiled_prompt"]
+                     json={"scenes": [{"n": 1, "body": 'Porch at dusk, "come inside"'}]}).json()
+    assert "come inside" not in p["scenes"][0]["compiled_prompt"]
+
+
+def test_prompt_text_is_otherwise_passed_through_as_written(client, claude):
+    """Nothing but quoted dialogue is edited out -- what you type is what is sent."""
+    claude.segment = {
+        "style_profile": "Shared style block.",
+        "scenes": [{"ordinal": 1, "title": "Deal", "beat": "b",
+                    "prompt": "Four men at a table --ar 16:9"}],
+    }
+    pid = segmented(client, scenes=1)
+    prompt = project(client, pid)["scenes"][0]["compiled_prompt"]
+    assert prompt == "Four men at a table --ar 16:9 Shared style block."
 
 
 def test_model_ordinals_are_renumbered_dense_and_ordered(client, claude):

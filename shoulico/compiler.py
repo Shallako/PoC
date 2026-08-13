@@ -3,7 +3,7 @@
 Claude does the segmentation and writes the per-scene prompt bodies plus one
 shared style block. The deterministic guardrail pass afterwards is what keeps
 the engine honest -- it runs on every compile, including prompts the user has
-hand-edited, so an edit can't reintroduce a flag the engine reads as text.
+hand-edited, so an edit can't reintroduce text the engine letters onto the image.
 """
 
 from __future__ import annotations
@@ -15,13 +15,6 @@ import time
 
 from . import config
 from .naming import slugify
-
-MJ_FLAGS = re.compile(
-    r"\s--(?:sref|cref|srefs|style|stylize|sw|cw|ar|v|niji|q|quality|chaos|c|s|seed|"
-    r"stop|tile|weird|iw|repeat|r|no|p|profile|raw|fast|relax|turbo)\b"
-    r"(?:\s+(?:https?://\S+|[^\s-][^\s]*))?",
-    re.IGNORECASE,
-)
 
 # Dialogue quoting is language-specific: French uses guillemets, German low/high
 # quotes, Japanese corner brackets. The engine letters any of them onto the image,
@@ -36,11 +29,6 @@ _QUOTED_DIALOGUE = re.compile(
 )
 
 
-def strip_mj_flags(text: str) -> str:
-    text = MJ_FLAGS.sub(" ", " " + text)
-    return re.sub(r"\s{2,}", " ", text).strip(" ,")
-
-
 def strip_quoted_dialogue(text: str) -> str:
     """Quoted dialogue gets rendered as on-image lettering. Drop the quotes."""
     text = _QUOTED_DIALOGUE.sub(" ", text)
@@ -53,8 +41,6 @@ def compile_prompt(body: str, style_block: str, dialect: dict | None = None) -> 
     """Scene body first, shared style block last -- the order the engine reads best."""
     dialect = dialect or {}
     text = body or ""
-    if dialect.get("strip_mj_flags", True):
-        text = strip_mj_flags(text)
     if dialect.get("strip_quoted_dialogue", True):
         text = strip_quoted_dialogue(text)
     text = text.strip()
@@ -117,7 +103,7 @@ one engine-targeted image prompt per beat.
 Rules for the prompts you write:
 - Write for a diffusion image model, not for a person. Describe what is visible: \
 subject, action, staging, camera framing, lighting, mood.
-- Never use Midjourney-style flags (--ar, --v, --sref, --sw, --stylize). The engine \
+- Never use command-line-style flags (--ar, --v, --stylize and the like). The engine \
 reads them as literal words. Aspect ratio is a separate API parameter.
 - Never put quoted dialogue or any words meant to appear in the picture into a prompt: \
 the engine renders quoted text as lettering on the image. Convey speech through facial \
