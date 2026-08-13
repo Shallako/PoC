@@ -156,18 +156,30 @@ def render(client, pid, **body) -> dict:
     return r.json()
 
 
-def wait_for_job(pid, timeout=60):
-    job = orchestrator.job_for(pid)
-    assert job is not None, "no job was started"
+def speak(client, pid, **body) -> dict:
+    r = client.post(f"/api/projects/{pid}/narration/speak",
+                    json={"confirm": True, **body})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def wait_for_job(pid, timeout=60, kind=orchestrator.KIND_RENDER):
+    job = orchestrator.job_for(pid, kind)
+    assert job is not None, f"no {kind} job was started"
     deadline = _time.time() + timeout
     while job.running and _time.time() < deadline:
         _time.sleep(0.02)
-    assert not job.running, f"job for {pid} still running after {timeout}s"
+    assert not job.running, f"{kind} job for {pid} still running after {timeout}s"
     return job
 
 
 def images(pid) -> list[str]:
     d = store.images_dir(pid)
+    return sorted(p.name for p in d.iterdir()) if d.is_dir() else []
+
+
+def audio_files(pid) -> list[str]:
+    d = store.audio_dir(pid)
     return sorted(p.name for p in d.iterdir()) if d.is_dir() else []
 
 

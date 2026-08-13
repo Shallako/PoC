@@ -31,8 +31,26 @@ MAX_STORY_CHARS = 5000                        # FR-101
 DEFAULT_SCENE_COUNT = 12
 MAX_SCENE_COUNT = 40
 WORKERS = 3                                   # concurrent generations
-NARRATION_WPM = 150                           # for duration estimates only
-NARRATION_CPM = 350                           # ditto, for unspaced scripts (zh/ja)
+
+# Pre-flight duration estimates only. A live measurement replaces these the
+# moment narration audio exists: 13 words measured 4.0s against the 5.2s these
+# predict, so they run roughly 30% long.
+NARRATION_WPM = 150
+NARRATION_CPM = 350                           # for unspaced scripts (zh/ja)
+
+# --------------------------------------------------------------------------- #
+# Narration audio (TTS)
+# --------------------------------------------------------------------------- #
+
+DEFAULT_VOICE = "eleven_flash_v2_5"
+DEFAULT_SECONDS_PER_SCENE = 8
+# ElevenLabs caps a single request at 40k characters; a narration line is two
+# orders of magnitude below that, so hitting it means something upstream is wrong.
+MAX_TTS_CHARS = 40000
+# TTS completed in ~5s live. The 3600s image ceiling exists because a paid render
+# once finished late; nothing about a speech job justifies that wait.
+AUDIO_POLL_TIMEOUT = 300
+AUDIO_POLL_SECONDS = 2
 
 
 def _from_file(*candidates: Path) -> str | None:

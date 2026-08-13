@@ -34,6 +34,35 @@ ONE_PIXEL_PNG = base64.b64decode(
     b"IQAAAABJRU5ErkJggg=="
 )
 
+# A real MPEG1 Layer III stream, so shoulico.audio parses it for real rather than
+# against a stub. Header FF FB 90 00: sync, MPEG1, Layer III, no CRC, 128 kbit/s,
+# 44100 Hz, no padding, stereo.
+AUDIO_TYPE = "text-to-audio"
+
+MP3_FRAME_HEADER = b"\xff\xfb\x90\x00"
+MP3_BITRATE = 128_000
+MP3_SAMPLE_RATE = 44_100
+MP3_SAMPLES_PER_FRAME = 1152
+MP3_FRAME_BYTES = 144 * MP3_BITRATE // MP3_SAMPLE_RATE          # 417
+MP3_FRAME_SECONDS = MP3_SAMPLES_PER_FRAME / MP3_SAMPLE_RATE     # ~0.026
+
+
+def silent_mp3(frames: int = 38) -> bytes:
+    """A decodable silent MP3. 38 frames is a shade under one second."""
+    body = MP3_FRAME_HEADER + b"\x00" * (MP3_FRAME_BYTES - len(MP3_FRAME_HEADER))
+    return body * frames
+
+
+def mp3_seconds(frames: int = 38) -> float:
+    """What shoulico.audio should measure for `silent_mp3(frames)`.
+
+    No Xing header is written, so the CBR path applies: bytes over bitrate.
+    """
+    return frames * MP3_FRAME_BYTES * 8 / MP3_BITRATE
+
+
+SILENT_MP3 = silent_mp3()
+
 
 class FakeRenderful:
     def __init__(self) -> None:
@@ -54,6 +83,10 @@ class FakeRenderful:
         self.download_status = 200
         self.payload = ONE_PIXEL_JPEG
         self.cost = 0.04
+        # Speech jobs are the same endpoint with a different `type`, so they are
+        # served here rather than by a second fake.
+        self.audio_payload = SILENT_MP3
+        self.audio_cost = 0.0035
 
         # Observed concurrency: how many generations were open at once.
         self.in_flight = 0
@@ -97,6 +130,11 @@ class FakeRenderful:
         with self.lock:
             return [s["payload"].get("prompt", "") for s in self.submits]
 
+    def submits_of_type(self, gen_type: str) -> list[dict]:
+        with self.lock:
+            return [s["payload"] for s in self.submits
+                    if s["payload"].get("type") == gen_type]
+
     def reset_counters(self) -> None:
         with self.lock:
             self.submits.clear()
@@ -126,9 +164,12 @@ class FakeRenderful:
                 return code, {"message": f"synthetic {code}"}
             self._seq += 1
             gid = f"gen-{self._seq}"
-            self._generations[gid] = {"polls": 0, "prompt": payload.get("prompt", "")}
+            gen_type = payload.get("type", "")
+            self._generations[gid] = {"polls": 0, "prompt": payload.get("prompt", ""),
+                                      "type": gen_type}
             self._open(gid)
-            return 200, {"id": gid, "status": "queued", "cost": self.cost}
+            cost = self.audio_cost if gen_type == AUDIO_TYPE else self.cost
+            return 200, {"id": gid, "status": "queued", "cost": cost}
 
     def handle_poll(self, gid: str) -> tuple[int, dict]:
         with self.lock:
@@ -147,9 +188,11 @@ class FakeRenderful:
                 return 200, {"id": gid, "status": "processing"}
 
             self._close(gid)
-            doc = {"id": gid, "status": "completed", "cost": self.cost}
+            is_audio = gen.get("type") == AUDIO_TYPE
+            doc = {"id": gid, "status": "completed",
+                   "cost": self.audio_cost if is_audio else self.cost}
             if not self.no_outputs:
-                doc["outputs"] = [f"{self.root}/files/{gid}.jpg"]
+                doc["outputs"] = [f"{self.root}/files/{gid}.{'mp3' if is_audio else 'jpg'}"]
             return 200, doc
 
     def handle_download(self, name: str) -> tuple[int, bytes]:
@@ -157,6 +200,8 @@ class FakeRenderful:
             self.downloads.append(name)
             if self.download_status != 200:
                 return self.download_status, b"gone"
+            if name.endswith(".mp3"):
+                return 200, self.audio_payload
             return 200, self.payload
 
 
@@ -203,7 +248,8 @@ def _handler_for(fake: FakeRenderful):
                 if code != 200:
                     self._send_json(code, {"message": "gone"})
                 else:
-                    self._send(200, body, "image/jpeg")
+                    self._send(200, body,
+                               "audio/mpeg" if name.endswith(".mp3") else "image/jpeg")
                 return
             self._send_json(404, {"message": f"no route {self.path}"})
 
