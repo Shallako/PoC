@@ -176,6 +176,9 @@ def create(name: str, story: str = "", *, engine: str | None = None,
 
         "engine": engine_key,
         "params": engines.defaults_for(engine_key),
+        # Settings for the engine's video sibling, where it has one. Empty for an
+        # image-only engine, so the key is always present and never guessed at.
+        "clip_params": engines.clip_defaults(engine_key),
         "scene_count": scene_count,
         "narration": {
             "voice": "",                     # narrator tone, fed to Claude

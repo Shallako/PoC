@@ -45,6 +45,7 @@ class ProjectPatch(BaseModel):
     style_profile: str | None = None
     engine: str | None = None
     params: dict | None = None
+    clip_params: dict | None = None
     scene_count: int | None = None
     prompt_language: str | None = None
     narration: dict | None = None
@@ -193,6 +194,11 @@ def _decorate(project: dict) -> dict:
     out.setdefault("prompt_language", "story")
     out.setdefault("claude_model", "")
     out.setdefault("claude_fell_back", False)
+    # Present for every project, empty for an image-only engine, so the page can
+    # ask "does this engine do video" without knowing the engine list.
+    out.setdefault("clip_params", engines.clip_defaults(project["engine"]))
+    out["price_per_clip"] = engines.price_per_clip(project["engine"],
+                                                   out.get("clip_params"))
     try:
         out["price_per_image"] = engines.price_per_image(project["engine"],
                                                          project.get("params"))
@@ -335,9 +341,15 @@ def api_patch(pid: str, body: ProjectPatch) -> dict:
         if body.engine is not None and body.engine != project["engine"]:
             project["engine"] = body.engine
             project["params"] = engines.defaults_for(body.engine)
+            # The video sibling belongs to the engine, so switching engine
+            # replaces its settings rather than carrying Veo's frame over to Sora.
+            project["clip_params"] = engines.clip_defaults(body.engine)
         if body.params is not None:
             merged = {**project.get("params", {}), **body.params}
             project["params"] = engines.validate(project["engine"], merged)
+        if body.clip_params is not None:
+            merged = {**project.get("clip_params", {}), **body.clip_params}
+            project["clip_params"] = engines.validate_clip(project["engine"], merged)
         if body.scenes:
             by_n = {s["n"]: s for s in project["scenes"]}
             for patch in body.scenes:

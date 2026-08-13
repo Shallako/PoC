@@ -3,12 +3,14 @@
 Story -> scenes -> engine-targeted prompts -> images -> narration script ->
 narration audio -> video -> export.
 
-Image creation defaults to **Seedream 5.0 Pro** through the Renderful API.
-Narration is spoken by **ElevenLabs Flash v2.5**, through the same API and the
-same key. The cut is assembled **on this machine** with ffmpeg -- nothing is
-uploaded and nothing is billed for it. Scope is **images, narration script,
-narration audio and a finished MP4** -- no generated video clips, no accounts,
-no billing layer.
+Image creation defaults to **Seedream 5.0 Pro** through the Renderful API, with
+**Nano Banana Pro** and **GPT Image 2** as alternatives -- those two also declare
+a video sibling (Veo 3.1, Sora 2), which is settings-only for now; see [Engines
+that also make video](#engines-that-also-make-video). Narration is spoken by
+**ElevenLabs Flash v2.5**, through the same API and the same key. The cut is
+assembled **on this machine** with ffmpeg -- nothing is uploaded and nothing is
+billed for it. Scope is **images, narration script, narration audio and a
+finished MP4** -- no generated video clips yet, no accounts, no billing layer.
 
 Claude writes one narration line per scene (PRD FR-1201/1203/1206) and you review
 and edit it before anything is spoken. Synthesis is a separate, confirmed step:
@@ -336,14 +338,57 @@ to apply), and an `inputs` array that drives both the UI controls and validation
  "options": ["1K", "2K"], "default": "2K", "confirmed": ["1K", "2K"]}
 ```
 
-Control types: `enum`, `seed`, `range`, `toggle`, `text`. `confirmed` lists the
-values actually seen working on a live account -- anything outside it renders a
-warning in the cost bar before you spend. Set `"verified": false` on an engine you
-haven't proven yet and the UI will tell you to render one scene before a batch.
-The built-in `custom` engine lets you type any Renderful model id.
+Control types: `enum`, `integer`, `seed`, `range`, `toggle`, `text`. `confirmed`
+lists the values actually seen working on a live account -- anything outside it
+renders a warning in the cost bar before you spend. Set `"verified": false` on an
+engine you haven't proven yet and the UI will tell you to render one scene before
+a batch. The built-in `custom` engine lets you type any Renderful model id.
+
+A shipped engine that is missing from your `engines.json` is added on next load;
+entries already in the file are never touched, so renaming or re-pricing one is
+safe and survives an upgrade.
 
 Only `seedream-5.0-pro` is confirmed against a live account (it rendered the Boston
 set). Everything else is unverified until you prove it.
+
+## Engines that also make video
+
+Three of the four engines are image-only. Two are paired with a video model from
+the same house, declared under `clip` on the image entry:
+
+| Engine | Image | Video sibling | Clip |
+|---|---|---|---|
+| Nano Banana Pro (Google) | $0.135 / 1k, up to 4K | `google-veo-3.1` | $2.82 at 720p, $5.64 at 1080p, 4-8s |
+| GPT Image 2 (OpenAI) | $0.03 / 1K, up to 4K | `sora-2` | $0.44-$0.88, 720p, 4-20s |
+
+Renderful has **no dual-mode model**: `type` is one-to-one, so `nano-banana-pro`
+is text-to-image and `google-veo-3.1` is text-to-video, and "an engine that also
+makes video" is a pair of ids stored on one entry. Both models generate their own
+speech and sound, which is what the audio inputs on the `clip` block are -- a clip
+does not need the narration audio from step 4.
+
+Every id, aspect ratio, resolution, duration and price band came from
+`GET /api/v1/models` on this account, not from memory. Run it yourself to refresh
+them; 584 models come back with their capabilities and their price bands.
+
+**Read the money twice.** A clip is 20-40x an image. Twelve scenes is about $1 in
+images and **$10-$68 in clips** depending on the pairing. Image estimates read the
+published band's floor at the lowest resolution and double per step, which is how
+Seedream's real 1K/2K prices behave; clip estimates take the **ceiling**, because
+guessing low on a clip would understate a batch by more than the entire image
+budget. Neither end is confirmed against a live charge yet.
+
+**What is and is not built.** The image half works end to end today -- pick either
+engine and render. The video half is *declared*: the model id, frame, length and
+audio options are real, they are validated by the same schema machinery as
+everything else, and they are saved on the project as `clip_params`. Nothing
+sends them yet, so choosing one of these engines costs exactly what its images
+cost. Wiring the clips would need a Renderful `text-to-video` submission, a job
+kind in the orchestrator, a confirmation gate priced per clip, and a decision
+about whether generated clips replace the ffmpeg stills in step 5 or sit beside
+them. The audio parameter names in particular are read off how the models behave,
+not off a published schema -- the catalog exposes only aspect ratio, resolution
+and duration -- so prove one clip before trusting a batch to them.
 
 ## Adding a voice
 

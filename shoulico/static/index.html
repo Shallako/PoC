@@ -179,6 +179,8 @@
       <div class="row" id="engineList"></div>
       <div id="engineNotes"></div>
       <div id="engineParams" class="row"></div>
+      <div id="clipPanel"></div>
+      <div id="clipParams" class="row"></div>
     </div>
 
     <div class="panel">
@@ -517,6 +519,11 @@ const DYN = {
   "scene.audio.estimated": "≈{seconds}s estimated",
   "confirm.speak.one": "Send 1 line to Renderful to be spoken{cost}?\n\nThis spends real credit.",
   "confirm.speak.many": "Send {count} lines to Renderful to be spoken{cost}?\n\nThis spends real credit.",
+  "engine.clipPrice": "~{price} / clip",
+  "clip.h": "Video: {name}",
+  "clip.hint": "This engine has a video sibling. Stills come from the engine above; {name} ({model}) generates a moving clip from the same prompt, and speaks its own dialogue and sound, so a clip needs no separate narration audio. A clip is about {price} against {images} for an image — roughly 20–40× — so read the numbers before you plan a batch. These settings are saved and validated now; the step that spends them is not built yet.",
+  "clip.notes": "{name} — what is proven and what is not",
+  "help.clip": "Renderful has no model that does both: an image engine and a video model are separate ids, so this pairs one with the other and stores both sets of settings on the project. The image half works today, end to end. The video half is declared — the model id, frame, length and audio options are real and validated — but nothing sends them yet, so choosing this engine costs exactly what its images cost, about {price} per clip if and when clips are wired. The audio controls in particular are read off how the model behaves, not off a published schema, so prove one clip before trusting a batch to them.",
   "help.styleHint": "One instruction for the whole set, not for a single image. Claude folds it into the shared style block — art style, period, palette, recurring characters, wardrobe — and that block is appended to every scene prompt, which is what keeps the images looking like one series instead of {count} unrelated pictures. It is read when you press Segment, so editing it afterwards changes nothing on its own: either segment again, or edit the style block directly on step 2, which is faster and does not rewrite your prompts.",
   "help.promptLang": "Scene prompts and the shared style block come back in the language the story is written in, so you can read and edit them. Image engines are trained mostly on English text, so if a prompt in your language renders badly, switch this to English and segment again — titles, beats and the narration script stay in your language either way.",
   "help.renderScene": "Sends this one scene to {engine} straight away and spends about {price}. No other scene is touched. If the scene already has an image, the new one is saved as a new version (v02, v03…) and the old file stays on disk. You are asked to confirm before anything is spent.",
@@ -668,7 +675,8 @@ function renderEngines() {
     div.className = "engine" + (P && P.engine === e.key ? " sel" : "");
     div.innerHTML = `<b>${escapeHtml(e.name)} ${e.verified ? "" : `<span class='chip'>${t("engine.unverified")}</span>`}</b>
       <span>${escapeHtml(e.provider)} · ${escapeHtml(e.strength)}</span>
-      <span>${tf("engine.price", { price: money(e.price_per_image) })}</span>`;
+      <span>${tf("engine.price", { price: money(e.price_per_image) })}${e.clip
+        ? " · " + escapeHtml(tf("engine.clipPrice", { price: money(e.clip.price_per_clip) })) : ""}</span>`;
     div.onclick = async () => {
       try { P = await api(`/projects/${P.id}`, "PATCH", { engine: e.key }); renderAll(); }
       catch (err) { alertBox(err); }
@@ -684,6 +692,29 @@ function renderEngines() {
 
   renderParams($("engineParams"), eng.inputs, P.params || {}, async (params) => {
     try { P = await api(`/projects/${P.id}`, "PATCH", { params }); clearAlerts(); renderAll(); }
+    catch (err) { alertBox(err); }
+  });
+  renderClip(eng);
+}
+
+// An engine with a video sibling gets a second block of controls: the clip
+// model's own frame, length and audio. They are saved and validated exactly like
+// the image parameters; what does not exist yet is the step that spends them.
+function renderClip(eng) {
+  const panel = $("clipPanel");
+  if (!eng.clip) { panel.innerHTML = ""; $("clipParams").innerHTML = ""; return; }
+  const price = money(P.price_per_clip || eng.clip.price_per_clip);
+  panel.innerHTML = `<h3 style="margin:16px 0 2px;font-size:14px">
+      ${escapeHtml(tf("clip.h", { name: eng.clip.name }))}<button type="button" class="hlp"
+        data-help="help.clip" data-help-price="${escapeHtml(price)}" aria-label="?">?</button></h3>
+    <p class="hint">${escapeHtml(tf("clip.hint", {
+      name: eng.clip.name, model: eng.clip.model, price,
+      images: money(P.price_per_image || eng.price_per_image) }))}</p>
+    ${eng.clip.notes.length ? `<details><summary>${escapeHtml(tf("clip.notes", { name: eng.clip.name }))}</summary>
+      <ul class="muted">${eng.clip.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}
+      <li>${escapeHtml(eng.clip.price_note)}</li></ul></details>` : ""}`;
+  renderParams($("clipParams"), eng.clip.inputs, P.clip_params || {}, async (clip_params) => {
+    try { P = await api(`/projects/${P.id}`, "PATCH", { clip_params }); clearAlerts(); renderAll(); }
     catch (err) { alertBox(err); }
   });
 }
