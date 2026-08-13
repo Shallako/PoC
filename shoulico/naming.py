@@ -52,6 +52,18 @@ def full_voiceover_stem(project: str) -> str:
     return f"{project}_full-voiceover"
 
 
+def video_stem(project: str) -> str:
+    return f"{project}_video"
+
+
+def captions_stem(project: str) -> str:
+    return f"{project}_captions"
+
+
+def timing_stem(project: str) -> str:
+    return f"{project}_timing"
+
+
 # Narration audio shares the flattened image stem, so dropping export/ into an
 # editor pairs picture and voice on the same row without renaming anything.
 audio_stem = flat_stem

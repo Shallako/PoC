@@ -298,5 +298,104 @@
       ]
     }
   },
-  "default_voice": "eleven_flash_v2_5"
+  "default_voice": "eleven_flash_v2_5",
+  "video": {
+    "ffmpeg": {
+      "name": "ffmpeg (this machine)",
+      "provider": "local",
+      "strength": "No API cost, no upload, no watermark · needs ffmpeg installed",
+      "badges": [
+        "local",
+        "free"
+      ],
+      "verified": true,
+      "schema_version": 1,
+      "notes": [
+        "Assembly is local: nothing is uploaded and nothing is billed.",
+        "Scene lengths come from measured narration audio. Speak the script first and the cut is exact; assemble before that and it follows the word-count estimate, which runs about 30% long."
+      ],
+      "inputs": [
+        {
+          "key": "aspect",
+          "label": "Frame",
+          "type": "enum",
+          "options": [
+            "source",
+            "16:9",
+            "9:16",
+            "1:1",
+            "4:3",
+            "3:4"
+          ],
+          "labels": {
+            "source": "Follow the rendered images",
+            "16:9": "16:9 · 1920x1080",
+            "9:16": "9:16 · 1080x1920",
+            "1:1": "1:1 · 1080x1080",
+            "4:3": "4:3 · 1440x1080",
+            "3:4": "3:4 · 1080x1440"
+          },
+          "default": "source"
+        },
+        {
+          "key": "motion",
+          "label": "Motion",
+          "type": "enum",
+          "options": [
+            "ken-burns",
+            "none"
+          ],
+          "labels": {
+            "ken-burns": "Ken Burns · slow zoom, alternating",
+            "none": "Still frames"
+          },
+          "default": "ken-burns"
+        },
+        {
+          "key": "subtitles",
+          "label": "Captions in the video",
+          "type": "enum",
+          "options": [
+            "soft",
+            "none",
+            "burn"
+          ],
+          "labels": {
+            "soft": "Track the player can switch off",
+            "none": "None · the .srt is still exported",
+            "burn": "Burned into the picture · re-encodes"
+          },
+          "default": "soft",
+          "help": "A .srt and .vtt are always written to export/ regardless."
+        },
+        {
+          "key": "fps",
+          "label": "Frames per second",
+          "type": "integer",
+          "min": 12,
+          "max": 60,
+          "default": 30
+        },
+        {
+          "key": "lead_in",
+          "label": "Silence before each line (s)",
+          "type": "range",
+          "min": 0.0,
+          "max": 3.0,
+          "step": 0.05,
+          "default": 0.35
+        },
+        {
+          "key": "tail",
+          "label": "Silence after each line (s)",
+          "type": "range",
+          "min": 0.0,
+          "max": 5.0,
+          "step": 0.05,
+          "default": 0.65
+        }
+      ]
+    }
+  },
+  "default_video": "ffmpeg"
 }

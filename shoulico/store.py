@@ -7,6 +7,8 @@ because render workers write concurrently.
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import shutil
 import threading
@@ -18,8 +20,14 @@ from typing import Callable
 from uuid import uuid4
 
 from . import config, engines
-from .naming import (asset_stem, audio_stem, flat_stem, full_voiceover_stem,
-                     narration_key, project_slug)
+from .naming import (asset_stem, audio_stem, captions_stem, flat_stem,
+                     full_voiceover_stem, narration_key, project_slug,
+                     timing_stem, video_stem)
+
+# MP4 because it is the container CapCut, Premiere, Resolve and every phone
+# already open without being told anything.
+VIDEO_SUFFIX = ".mp4"
+CAPTIONS_SUFFIX = ".srt"
 
 _locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 _locks_guard = threading.Lock()
@@ -52,6 +60,10 @@ def narration_dir(pid: str) -> Path:
 
 def audio_dir(pid: str) -> Path:
     return project_dir(pid) / "audio"
+
+
+def video_dir(pid: str) -> Path:
+    return project_dir(pid) / "video"
 
 
 def export_dir(pid: str) -> Path:
@@ -149,6 +161,7 @@ def create(name: str, story: str = "", *, engine: str | None = None,
 
     engine_key = engine or engines.default_engine_key()
     voice_key = engines.default_voice_key()
+    video_key = engines.default_video_key()
     project = {
         "id": pid,
         "name": name.strip() or pid,
@@ -172,10 +185,16 @@ def create(name: str, story: str = "", *, engine: str | None = None,
             "voice_engine": voice_key,
             "voice_params": engines.defaults_for(voice_key, engines.SECTION_VOICES),
         },
+        # How the finished cut is assembled. Local and free, so no spend key.
+        "video": {
+            "profile": video_key,
+            "params": engines.defaults_for(video_key, engines.SECTION_VIDEO),
+        },
         "scenes": [],
         "spend": {"images": 0, "lines": 0, "actual": 0.0},
     }
-    for d in (images_dir(pid), narration_dir(pid), audio_dir(pid), export_dir(pid)):
+    for d in (images_dir(pid), narration_dir(pid), audio_dir(pid),
+              video_dir(pid), export_dir(pid)):
         d.mkdir(parents=True, exist_ok=True)
     _write_json(project_file(pid), project)
     _write_json(manifest_file(pid), {})
@@ -361,6 +380,84 @@ def export(pid: str, project: dict, *, flatten: bool = True) -> dict:
     if full:
         (edir / (full_voiceover_stem(pid) + ".txt")).write_text(full + "\n", encoding="utf-8")
 
+    extras = write_editor_files(pid, project, edir)
+
     if manifest_file(pid).is_file():
         shutil.copy2(manifest_file(pid), edir / "manifest.json")
-    return {"dir": str(edir), "files": rows, "full_voiceover": bool(full)}
+    return {"dir": str(edir), "files": rows, "full_voiceover": bool(full), **extras}
+
+
+def write_editor_files(pid: str, project: dict, edir: Path) -> dict:
+    """Captions, a timing sheet, and the finished cut if one has been assembled.
+
+    This is the hand-off half of export: CapCut (or Premiere, or Resolve) can
+    import an SRT and place every line at the right moment instead of the editor
+    dragging clips against a waveform by eye. It costs nothing and needs no
+    ffmpeg, so it happens on every export whether a video was assembled or not.
+    """
+    # Local import: timeline reads this module's directory helpers.
+    from . import captions as captions_mod
+    from . import timeline as timeline_mod
+
+    settings = video_settings(project)
+    beats, _ = timeline_mod.build(project, settings)
+    cues = captions_mod.build(beats)
+
+    out: dict = {"captions": "", "captions_vtt": "", "timing": "", "video": "",
+                 "runtime_seconds": timeline_mod.total_seconds(beats),
+                 "runtime_measured": timeline_mod.all_measured(beats)}
+    if cues:
+        srt = edir / (captions_stem(pid) + ".srt")
+        vtt = edir / (captions_stem(pid) + ".vtt")
+        srt.write_text(captions_mod.to_srt(cues), encoding="utf-8")
+        vtt.write_text(captions_mod.to_vtt(cues), encoding="utf-8")
+        out["captions"], out["captions_vtt"] = srt.name, vtt.name
+
+    if beats:
+        sheet = edir / (timing_stem(pid) + ".csv")
+        sheet.write_text(timing_csv(beats), encoding="utf-8", newline="")
+        out["timing"] = sheet.name
+
+    assembled = video_dir(pid) / (video_stem(pid) + VIDEO_SUFFIX)
+    if assembled.is_file():
+        dest = edir / assembled.name
+        shutil.copy2(assembled, dest)
+        out["video"] = dest.name
+    return out
+
+
+def timing_csv(beats: list) -> str:
+    """One row per scene: where it starts, how long it holds, what is said.
+
+    Written with the csv module rather than joined by hand because a narration
+    line contains commas and quotation marks by nature, and a hand-joined sheet
+    would silently corrupt the very column an editor cares about.
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["scene", "title", "start_seconds", "duration_seconds",
+                     "speech_start_seconds", "speech_seconds", "duration_source",
+                     "image", "audio", "narration"])
+    for b in beats:
+        writer.writerow([
+            b.n, b.title, f"{b.start:.3f}", f"{b.duration:.3f}",
+            f"{b.speech_start:.3f}", f"{b.speech_seconds:.3f}",
+            "measured" if b.measured else "estimated",
+            b.image.name, b.audio.name if b.audio else "", b.text,
+        ])
+    return buf.getvalue()
+
+
+def video_settings(project: dict) -> dict:
+    """Validated assembly settings, falling back to the shipped defaults.
+
+    Export must never fail because a stored setting went stale, so anything the
+    schema rejects is replaced rather than raised -- the settings endpoint is
+    where a bad value gets reported.
+    """
+    stored = project.get("video") or {}
+    key = stored.get("profile") or engines.default_video_key()
+    try:
+        return engines.validate(key, stored.get("params"), engines.SECTION_VIDEO)
+    except engines.ParamError:
+        return engines.defaults_for(engines.default_video_key(), engines.SECTION_VIDEO)

@@ -171,9 +171,10 @@ LEGACY_VOICE_NAMES: dict[str, str] = {
     "Arnold": DEFAULT_VOICE_ID,
 }
 
-# Bump when a shipped voice entry's own data is wrong and the copy already written
-# to engines.json has to be repaired. v1 shipped display names as voice options.
+# Bump when a shipped entry's own data is wrong and the copy already written to
+# engines.json has to be repaired. Voices v1 shipped display names as options.
 VOICE_SCHEMA_VERSION = 2
+VIDEO_SCHEMA_VERSION = 1
 
 # Labels read "Name · accent gender · character"; the name alone identifies the
 # voice in an error message without printing 21 opaque ids.
@@ -259,8 +260,74 @@ DEFAULT_VOICES: dict[str, Any] = {
     },
 }
 
+SECTION_VIDEO = "video"
+
+# Assembly happens on this machine with ffmpeg, so nothing here is billed. It
+# still lives in the registry: these are typed inputs with defaults, which is
+# exactly what the schema machinery already draws controls for and validates,
+# and putting them here means the defaults are yours to change in engines.json.
+DEFAULT_VIDEO_PROFILES: dict[str, Any] = {
+    "ffmpeg": {
+        "name": "ffmpeg (this machine)",
+        "provider": "local",
+        "strength": "No API cost, no upload, no watermark · needs ffmpeg installed",
+        "badges": ["local", "free"],
+        "verified": True,
+        "schema_version": VIDEO_SCHEMA_VERSION,
+        "notes": [
+            "Assembly is local: nothing is uploaded and nothing is billed.",
+            "Scene lengths come from measured narration audio. Speak the script "
+            "first and the cut is exact; assemble before that and it follows the "
+            "word-count estimate, which runs about 30% long.",
+        ],
+        "inputs": [
+            {
+                "key": "aspect", "label": "Frame", "type": "enum",
+                "options": [config.VIDEO_ASPECT_SOURCE, *config.VIDEO_CANVASES],
+                "labels": {
+                    config.VIDEO_ASPECT_SOURCE: "Follow the rendered images",
+                    **{k: f"{k} · {w}x{h}" for k, (w, h) in config.VIDEO_CANVASES.items()},
+                },
+                "default": config.VIDEO_ASPECT_SOURCE,
+            },
+            {
+                "key": "motion", "label": "Motion", "type": "enum",
+                "options": ["ken-burns", "none"],
+                "labels": {"ken-burns": "Ken Burns · slow zoom, alternating",
+                           "none": "Still frames"},
+                "default": "ken-burns",
+            },
+            {
+                "key": "subtitles", "label": "Captions in the video", "type": "enum",
+                "options": ["soft", "none", "burn"],
+                "labels": {"soft": "Track the player can switch off",
+                           "none": "None · the .srt is still exported",
+                           "burn": "Burned into the picture · re-encodes"},
+                "default": "soft",
+                "help": "A .srt and .vtt are always written to export/ regardless.",
+            },
+            {
+                "key": "fps", "label": "Frames per second", "type": "integer",
+                "min": 12, "max": 60, "default": config.VIDEO_FPS,
+            },
+            {
+                "key": "lead_in", "label": "Silence before each line (s)",
+                "type": "range", "min": 0.0, "max": 3.0, "step": 0.05,
+                "default": config.VIDEO_LEAD_IN_SECONDS,
+            },
+            {
+                "key": "tail", "label": "Silence after each line (s)",
+                "type": "range", "min": 0.0, "max": 5.0, "step": 0.05,
+                "default": config.VIDEO_TAIL_SECONDS,
+            },
+        ],
+    },
+}
+
 DEFAULT_REGISTRY["default_voice"] = config.DEFAULT_VOICE
 DEFAULT_REGISTRY[SECTION_VOICES] = DEFAULT_VOICES
+DEFAULT_REGISTRY["default_video"] = config.DEFAULT_VIDEO_PROFILE
+DEFAULT_REGISTRY[SECTION_VIDEO] = DEFAULT_VIDEO_PROFILES
 
 
 class ParamError(ValueError):
@@ -286,24 +353,30 @@ def _migrate(reg: dict) -> tuple[dict, bool]:
     image engine exactly as it was.
     """
     changed = False
-    if SECTION_VOICES not in reg:
-        reg[SECTION_VOICES] = json.loads(json.dumps(DEFAULT_VOICES))
-        changed = True
-    if "default_voice" not in reg:
-        reg["default_voice"] = config.DEFAULT_VOICE
-        changed = True
-
-    # Repair a shipped voice whose own data was wrong. Filling in a missing
-    # section is not enough here: the broken voice list had already been written
-    # to disk, so leaving the file alone would leave it broken forever. Only
-    # voices this app ships are touched, and only when the version they were
-    # written at is behind the current one -- a voice the user added themselves
-    # has no shipped counterpart and is never rewritten.
-    for key, shipped in DEFAULT_VOICES.items():
-        have = reg[SECTION_VOICES].get(key)
-        if have is None or have.get("schema_version", 1) < shipped["schema_version"]:
-            reg[SECTION_VOICES][key] = json.loads(json.dumps(shipped))
+    sections = (
+        (SECTION_VOICES, DEFAULT_VOICES, "default_voice", config.DEFAULT_VOICE),
+        (SECTION_VIDEO, DEFAULT_VIDEO_PROFILES, "default_video",
+         config.DEFAULT_VIDEO_PROFILE),
+    )
+    for section, shipped_all, default_key, default_value in sections:
+        if section not in reg:
+            reg[section] = json.loads(json.dumps(shipped_all))
             changed = True
+        if default_key not in reg:
+            reg[default_key] = default_value
+            changed = True
+
+        # Repair a shipped entry whose own data was wrong. Filling in a missing
+        # section is not enough: the broken voice list had already been written
+        # to disk, so leaving the file alone would have left it broken forever.
+        # Only entries this app ships are touched, and only when the version they
+        # were written at is behind -- an entry the user added themselves has no
+        # shipped counterpart and is never rewritten.
+        for key, shipped in shipped_all.items():
+            have = reg[section].get(key)
+            if have is None or have.get("schema_version", 1) < shipped["schema_version"]:
+                reg[section][key] = json.loads(json.dumps(shipped))
+                changed = True
     return reg, changed
 
 
@@ -329,7 +402,8 @@ def registry(reload: bool = False) -> dict:
 def _entry(section: str, key: str) -> dict:
     found = registry().get(section, {}).get(key)
     if found is None:
-        noun = "voice" if section == SECTION_VOICES else "engine"
+        noun = {SECTION_VOICES: "voice", SECTION_VIDEO: "video profile"}.get(
+            section, "engine")
         raise ParamError(f"unknown {noun} {key!r}")
     return found
 
@@ -344,6 +418,14 @@ def voice(key: str) -> dict:
 
 def default_voice_key() -> str:
     return registry().get("default_voice", config.DEFAULT_VOICE)
+
+
+def video_profile(key: str) -> dict:
+    return _entry(SECTION_VIDEO, key)
+
+
+def default_video_key() -> str:
+    return registry().get("default_video", config.DEFAULT_VIDEO_PROFILE)
 
 
 def default_engine_key() -> str:
@@ -400,6 +482,19 @@ def validate(key: str, params: dict | None, section: str = SECTION_ENGINES) -> d
                         f"and {spec.get('max', 2 ** 31 - 1)}"
                     )
                 out[k] = seed
+
+        elif kind == "integer":
+            # Distinct from "range" because the consumer is a command line, not
+            # arithmetic: a frame rate of 30.0 is not a frame rate ffmpeg takes.
+            try:
+                num = int(value)
+            except (TypeError, ValueError):
+                raise ParamError(f"{spec['label']}: must be a whole number") from None
+            if not (spec["min"] <= num <= spec["max"]):
+                raise ParamError(
+                    f"{spec['label']}: must be between {spec['min']} and {spec['max']}"
+                )
+            out[k] = num
 
         elif kind == "range":
             try:
@@ -502,6 +597,37 @@ def public_voices() -> dict:
                 "inputs": v.get("inputs", []),
             }
             for k, v in reg.get(SECTION_VOICES, {}).items()
+        },
+    }
+
+
+def public_video() -> dict:
+    """Video profiles as sent to the browser, plus whether ffmpeg is actually here.
+
+    The UI has to be able to say "install this" instead of offering a button that
+    fails, so availability travels with the profiles rather than being guessed.
+    """
+    from . import video  # local: keeps a subprocess module out of import time
+
+    reg = registry()
+    return {
+        "default": reg.get("default_video", config.DEFAULT_VIDEO_PROFILE),
+        "ffmpeg": {
+            "available": video.available(),
+            "version": video.version(),
+            "hint": video.install_hint(),
+        },
+        "profiles": {
+            k: {
+                "key": k,
+                "name": v.get("name", k),
+                "provider": v.get("provider", ""),
+                "strength": v.get("strength", ""),
+                "badges": v.get("badges", []),
+                "notes": v.get("notes", []),
+                "inputs": v.get("inputs", []),
+            }
+            for k, v in reg.get(SECTION_VIDEO, {}).items()
         },
     }
 

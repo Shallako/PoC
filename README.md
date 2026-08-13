@@ -1,12 +1,14 @@
 # Shoulico -- local MVP
 
 Story -> scenes -> engine-targeted prompts -> images -> narration script ->
-narration audio -> export.
+narration audio -> video -> export.
 
 Image creation defaults to **Seedream 5.0 Pro** through the Renderful API.
 Narration is spoken by **ElevenLabs Flash v2.5**, through the same API and the
-same key. Scope is **images, narration script and narration audio** -- no video
-assembly, no accounts, no billing layer.
+same key. The cut is assembled **on this machine** with ffmpeg -- nothing is
+uploaded and nothing is billed for it. Scope is **images, narration script,
+narration audio and a finished MP4** -- no generated video clips, no accounts,
+no billing layer.
 
 Claude writes one narration line per scene (PRD FR-1201/1203/1206) and you review
 and edit it before anything is spoken. Synthesis is a separate, confirmed step:
@@ -29,6 +31,14 @@ python -m venv .venv
 
 (The venv already exists if you're reading this on the machine it was built on.)
 
+**ffmpeg, for step 5 only.** `winget install Gyan.FFmpeg` on Windows, `brew
+install ffmpeg` on macOS. Everything except assembling the MP4 works without it,
+captions and the timing sheet included, and the app says so rather than failing:
+the panel prints the install command and `assemble` answers 424, not 500. winget
+appends its `bin` to the persistent user PATH, so **restart the terminal and the
+app** afterwards -- a running process keeps the environment it started with.
+`SHOULICO_FFMPEG` takes a full path if PATH does not reach it.
+
 ## Keys
 
 | Key | Used for | Lookup order |
@@ -37,10 +47,11 @@ python -m venv .venv
 | Anthropic | segmentation, prompt writing, narration | `ANTHROPIC_API_KEY` -> `PoC\anthropic_key.txt` -> `Renderful\anthropic_key.txt` -> an `ant auth login` profile |
 
 Both keys are present on this machine (`PoC\api_key.txt` and
-`PoC\anthropic_key.txt`), so all five steps are live. Without an Anthropic key,
+`PoC\anthropic_key.txt`), so all six steps are live. Without an Anthropic key,
 step 1 (segment) and the narration button stay disabled; everything else still
-works, including hand-writing prompts, rendering and speaking. A key that is present but
-does not start with `sk-ant-` is flagged in the UI rather than shown green.
+works, including hand-writing prompts, rendering and speaking. A key that is
+present but does not start with `sk-ant-` is flagged in the UI rather than shown
+green.
 
 Keys are read on demand, never logged, never sent to the browser, and never
 written into a project file. The UI only ever sees a found/missing boolean.
@@ -124,7 +135,7 @@ spend money.
 
 ---
 
-## The five steps
+## The six steps
 
 1. **Story** -- paste up to 5,000 characters in any language, pick the image count
    and the engine. Engine parameters are rendered from the registry schema and
@@ -145,9 +156,16 @@ spend money.
    /api/projects/{id}/narration/speak` without `confirm: true` is a 400. One MP3
    per scene under the image's own stem, a player and the measured duration
    beside each line, and per-line "Speak" buttons for one-offs.
-5. **Export** -- flattened, sort-safe copies plus matching narration files and
-   audio, the full voiceover, and a copy of `manifest.json`. `flatten: false`
-   keeps the versioned filenames instead. `export/` is cleared first, so it never
+5. **Video** -- cut the finished MP4 on this machine with ffmpeg. Each scene holds
+   the screen for exactly as long as its narration audio runs, with an optional
+   Ken Burns zoom, and captions built from the same timeline. Nothing is uploaded
+   and nothing is billed, so unlike rendering and speaking there is no
+   confirmation gate. ffmpeg is optional: without it the panel says so and offers
+   the install command, and captions still export.
+6. **Export** -- flattened, sort-safe copies plus matching narration files and
+   audio, the full voiceover, an `.srt`, a `.vtt`, a timing sheet, the assembled
+   video if there is one, and a copy of `manifest.json`. `flatten: false` keeps
+   the versioned filenames instead. `export/` is cleared first, so it never
    carries files from a previous run.
 
 ## What lands on disk
@@ -159,11 +177,36 @@ projects/<project-id>/
   images/          <project>_<NNN>_<slug>_v<VV>[_seed<SEED>].<jpg|png>
   narration/       <project>_<NNN>_<slug>.txt   and  <project>_full-voiceover.txt
   audio/           <project>_<NNN>_<slug>.mp3   -- the spoken line, same stem
+  video/           <project>_<NNN>_<slug>_seg.mp4  -- one segment per scene
+                   <project>_video.mp4              -- the finished cut
   export/          flattened <project>_<NNN>_<slug>.<jpg|png> + .txt + .mp3
-                   + <project>_full-voiceover.txt + manifest.json
-engines.json       the engine and voice registries -- edit to add a model
+                   + <project>_full-voiceover.txt + <project>_captions.srt/.vtt
+                   + <project>_timing.csv + <project>_video.mp4 + manifest.json
+engines.json       engine, voice and video registries -- edit to add a model
 i18n/<code>.json   cached interface translations, one file per language
 ```
+
+## Getting to a finished video
+
+The three ways out of `export/`, cheapest first:
+
+| Route | Cost per 12-scene story | Needs |
+|---|---|---|
+| Captions + timing sheet into CapCut | **$0.00** | nothing |
+| Assemble the MP4 here (step 5) | **$0.00** | ffmpeg installed |
+| Generated video clips per scene | $1.80 -- $3.60 | not built; see below |
+
+`<project>_timing.csv` is the hand-off: one row per scene with its start, its
+duration, whether that duration was measured or estimated, and the exact
+narration text. An editor can place the whole cut from it without dragging a
+single clip against a waveform.
+
+Generated image-to-video clips are deliberately **not** built. Renderful is a
+generation API, not an editing one: it returns N separate silent clips with no
+narration and no way to join them, so buying motion does not remove the assembly
+step, it adds cost on top of it. The cheapest usable model is 2--4x the entire
+cost of the images and narration combined, and its clips are a fixed ~5s against
+narration lines that commonly run 5--15s. A still holds any length for free.
 
 ---
 
@@ -341,18 +384,23 @@ mistake above.
 
 ## Not built (deliberately)
 
-Video assembly / Seedance, SRT/VTT captions, billing and credits, accounts and
-auth, sharing links. Multi-user concerns from the PRD (Postgres, Redis, S3, KMS,
-spend caps at an orchestrator) collapse here to: the filesystem, `manifest.json`,
-a thread pool, and a confirmation dialog.
+**Generated video clips / Seedance.** Reasoned through under *Getting to a
+finished video* above: it costs 2--4x the whole rest of the project, returns
+fixed-length silent clips against variable-length narration, and still leaves
+the assembly step to be done locally. A still holds any length for free.
 
-Captions are the obvious next thing: measured durations make an SRT arithmetic
-rather than guesswork.
+**Billing and credits, accounts and auth, sharing links.** Multi-user concerns
+from the PRD (Postgres, Redis, S3, KMS, spend caps at an orchestrator) collapse
+here to: the filesystem, `manifest.json`, a thread pool, and a confirmation
+dialog.
+
+Video assembly and SRT/VTT captions were on this list and are now built -- steps
+5 and 6.
 
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 99 offline tests, free
+    .venv\Scripts\python -m pytest             # 140 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 The offline suite drives the real FastAPI app against a fake Renderful HTTP
@@ -361,6 +409,23 @@ server on loopback and a fake Anthropic client, so the retry ladder, poll loop,
 non-loopback request into a failure, so it can never spend. The fake serves a
 genuine MPEG frame stream for speech jobs, so the duration parser is measured
 against real bytes rather than a stub.
+
+Video assembly is faked at `subprocess.run`, not at the module boundary, so
+every filtergraph and codec flag is constructed for real and asserted on. What
+that cannot prove is that ffmpeg *accepts* the command line, so the three tests
+making that claim are marked `needs_ffmpeg` and skip unless a real one is
+installed. They encode locally and spend nothing, so they are not `live` tests --
+they ffprobe the result and check the container length against the timeline,
+because a wrong zoompan frame count does not error, it silently produces a video
+of the wrong length.
+
+The missing-ffmpeg path is forced with a fixture rather than left to the
+developer's PATH. Otherwise the suite proves different things on different
+machines, and silently stops proving that one the moment somebody installs
+ffmpeg.
+
+Installing ffmpeg is under *Install* above -- and the restart it needs applies to
+the test run too.
 
 The live suite talks to the real Renderful and Anthropic accounts. It is skipped
 unless you pass --live, renders one 1K image (SHOULICO_LIVE_IMAGE_BUDGET, default

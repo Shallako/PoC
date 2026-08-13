@@ -260,10 +260,13 @@ def test_export_pairs_flattened_images_with_narration(client, claude, api):
 
     body = client.post(f"/api/projects/{pid}/export", json={}).json()
     names = sorted(p.name for p in store.export_dir(pid).iterdir())
+    # Captions and the timing sheet ride along on every export: they cost
+    # nothing, need no ffmpeg, and are what lets an editor place the cut.
     assert names == ["manifest.json",
                      f"{pid}_001_beat-1.jpg", f"{pid}_001_beat-1.txt",
                      f"{pid}_002_beat-2.jpg", f"{pid}_002_beat-2.txt",
-                     f"{pid}_full-voiceover.txt"]
+                     f"{pid}_captions.srt", f"{pid}_captions.vtt",
+                     f"{pid}_full-voiceover.txt", f"{pid}_timing.csv"]
     assert body["full_voiceover"] and body["files"][0]["narration"] == f"{pid}_001_beat-1.txt"
     assert json.loads((store.export_dir(pid) / "manifest.json").read_text(encoding="utf-8"))
 

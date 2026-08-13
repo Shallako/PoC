@@ -129,7 +129,8 @@
   <button data-step="1" class="active" data-i18n="nav.1">1 · Story</button>
   <button data-step="2" data-i18n="nav.2">2 · Scenes &amp; prompts</button>
   <button data-step="3" data-i18n="nav.3">3 · Render</button>
-  <button data-step="4" data-i18n="nav.4">4 · Export</button>
+  <button data-step="4" data-i18n="nav.4">4 · Video</button>
+  <button data-step="5" data-i18n="nav.5">5 · Export</button>
   <div class="spacer"></div>
   <button class="btn ghost sm" id="deleteProjectBtn" data-i18n="nav.delete">Delete project</button>
 </nav>
@@ -276,25 +277,64 @@
   </section>
 
   <!-- ------------------------------------------------------- step 4 -->
+  <!-- ------------------------------------------------------- step 4 -->
   <section id="step4" class="hidden">
     <div class="panel">
-      <h2 data-i18n="s4.h">Export</h2>
-      <p class="hint" data-i18n="s4.hint">Copies the selected render of each scene into <code>export/</code> under
+      <h2 data-i18n="s4.h">Video</h2>
+      <p class="hint" data-i18n="s4.hint">Cuts the finished video on this machine with ffmpeg: one segment per
+        scene, held for exactly as long as its narration actually runs, joined into a single MP4. Nothing is
+        uploaded and nothing is billed. Captions are written either way — an <code>.srt</code> and a
+        <code>.vtt</code> land in <code>export/</code> even if you never assemble a cut.</p>
+      <div id="ffmpegState"></div>
+      <div id="videoProfile"></div>
+      <div class="params" id="videoParams"></div>
+    </div>
+
+    <div class="panel">
+      <h2 data-i18n="s4.plan.h">The cut</h2>
+      <p class="hint" data-i18n="s4.plan.hint">Scene lengths come from measured narration audio wherever it
+        exists. Where a line has not been spoken yet the word-count estimate stands in, and it runs about 30%
+        long — so the runtime below is a projection until every line has a voice.</p>
+      <div id="videoPlan"></div>
+      <p></p>
+      <button class="btn" id="assembleBtn" data-i18n="s4.assemble">Assemble the video</button>
+      <button class="btn ghost sm hidden" id="cancelVideoBtn" data-i18n="s4.cancel">Cancel</button>
+      <button type="button" class="hlp" data-help="help.assemble" aria-label="?">?</button>
+      <span class="muted" id="videoStatus" style="margin-left:10px"></span>
+      <div id="videoOut"></div>
+    </div>
+
+    <div class="panel">
+      <h2 data-i18n="s4.caps.h">Captions</h2>
+      <p class="hint" data-i18n="s4.caps.hint">Built from the same timeline the video is cut on, so the words on
+        screen and the words in the ear cannot drift apart. Split at sentence boundaries, two lines at most, and
+        timed inside each scene's own audio.</p>
+      <a class="btn ghost sm" id="srtLink" download data-i18n="s4.caps.srt">Download .srt</a>
+      <a class="btn ghost sm" id="vttLink" download data-i18n="s4.caps.vtt">Download .vtt</a>
+      <span class="muted" id="capsCount" style="margin-left:10px"></span>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------- step 5 -->
+  <section id="step5" class="hidden">
+    <div class="panel">
+      <h2 data-i18n="s5.h">Export</h2>
+      <p class="hint" data-i18n="s5.hint">Copies the selected render of each scene into <code>export/</code> under
         flattened, sort-safe names, writes the matching narration text and audio files, and drops a copy of
         <code>manifest.json</code> beside them. Image, script and voice share one stem per scene, so dropping the
         folder into an editor pairs them on sight.</p>
       <label><input type="checkbox" id="flatten" checked style="width:auto">
-        <span data-i18n="s4.flatten">flatten filenames (drop <code>_vNN</code> / <code>_seed</code>)</span></label>
+        <span data-i18n="s5.flatten">flatten filenames (drop <code>_vNN</code> / <code>_seed</code>)</span></label>
       <p></p>
-      <button class="btn" id="exportBtn" data-i18n="s4.write">Write export folder</button>
+      <button class="btn" id="exportBtn" data-i18n="s5.write">Write export folder</button>
       <span class="muted" id="exportMsg" style="margin-left:10px"></span>
       <div id="exportOut"></div>
     </div>
     <div class="panel">
-      <h2 data-i18n="s4.prov.h">Provenance</h2>
-      <p class="hint" data-i18n="s4.prov.hint">One record per asset: engine, seed, params, and the exact prompt
+      <h2 data-i18n="s5.prov.h">Provenance</h2>
+      <p class="hint" data-i18n="s5.prov.hint">One record per asset: engine, seed, params, and the exact prompt
         that was sent.</p>
-      <button class="btn ghost sm" id="manifestBtn" data-i18n="s4.manifest">Show manifest.json</button>
+      <button class="btn ghost sm" id="manifestBtn" data-i18n="s5.manifest">Show manifest.json</button>
       <pre class="prompt hidden" id="manifestOut"></pre>
     </div>
   </section>
@@ -319,6 +359,8 @@ const $ = (id) => document.getElementById(id);
 let ENGINES = null, STATUS = null, P = null, POLL = null, PLAN = null;
 // Narration audio runs as its own job, so it gets its own registry, plan and poll.
 let VOICES = null, TTS_PLAN = null, TTS_POLL = null;
+// So does the video cut, which is local and therefore free -- no plan to confirm.
+let VIDEO = null, VIDEO_PLAN = null, VIDEO_POLL = null;
 
 // ------------------------------------------------------------------ fetch
 async function api(path, method = "GET", body) {
@@ -386,6 +428,20 @@ const DYN = {
   "ui.lang.partial": "{count} strings could not be translated; those stay in English.",
   "engine.unverified": "unverified",
   "engine.price": "~{price} / image",
+  "video.ffmpeg.ok": "Assembly is ready: {version}",
+  "video.ffmpeg.missing": "ffmpeg is not installed, so the video cannot be assembled here. Captions and the timing sheet still export.",
+  "video.nothing": "Nothing to assemble yet — render some scenes first.",
+  "video.summary.measured": "{count} scenes · {runtime} · {width}×{height}. Every length measured from real narration audio.",
+  "video.summary.estimated": "{count} scenes · about {runtime} · {width}×{height}. Some lengths are word-count estimates and run roughly 30% long — speak the script for an exact cut.",
+  "video.skip": "{count} scene(s) have no rendered image and will not appear.",
+  "video.silent": "{count} scene(s) have no narration audio and will play silent.",
+  "video.th.at": "starts",
+  "video.th.holds": "holds",
+  "video.cues": "{count} caption cues",
+  "video.encoding": "encoding scene {done} of {total}…",
+  "video.done": "{file} · {runtime} · {width}×{height}",
+  "video.download": "Download the video",
+  "export.extras": "Also written: {files} — total runtime {runtime}.",
   "engine.dialect": "{engine} dialect & guardrails",
   "scene.none": "No scenes yet — run step 1.",
   "scene.prompt": "Prompt body",
@@ -467,6 +523,7 @@ const DYN = {
   "help.speakBatch": "Sends every narration line that has no audio yet, plus any you have edited since it was spoken, to the voice above. Lines whose audio already matches are skipped, so this never pays twice for the same line. Speech is billed per character, so the estimate follows the length of what you wrote — a whole story is usually a few cents. You are asked to confirm before anything is spent.",
   "help.speakScene": "Speaks this one line straight away and spends about {price}. No other line is touched. The file is written under the same name as this scene's image, and its real duration is measured from the audio that comes back and shown beside it.",
   "help.forceSpeak": "Ignores the audio already on disk and speaks every line again, including ones that have not changed. Use it after switching voice or changing speed — the text is the same then, so nothing would be re-spoken otherwise. It costs the full batch again.",
+  "help.assemble": "Cuts the whole video on this machine with ffmpeg and spends nothing — no upload, no API call, no watermark. Each scene holds the screen for exactly as long as its narration audio runs, so speak the script first and the cut is exact; assemble before that and lengths fall back to the word-count estimate, which runs about 30% long. Re-assembling replaces the previous cut.",
 };
 
 let SOURCE = {};                 // key -> English
@@ -586,10 +643,13 @@ function pricePerImage() {
 function goStep(n) {
   document.querySelectorAll("nav.steps button[data-step]").forEach((b) =>
     b.classList.toggle("active", b.dataset.step === String(n)));
-  [1, 2, 3, 4].forEach((i) => $("step" + i).classList.toggle("hidden", i !== n));
+  // Derived from the markup, so adding a step never needs this list edited.
+  document.querySelectorAll("main > section[id^='step']").forEach((s) =>
+    s.classList.toggle("hidden", s.id !== "step" + n));
   $("costbar").style.display = n === 3 ? "flex" : "none";
   if (n === 2) refreshTtsPlan();
   if (n === 3) refreshPlan();
+  if (n === 4) refreshVideoPlan();
 }
 document.querySelectorAll("nav.steps button[data-step]").forEach((b) =>
   b.addEventListener("click", () => goStep(Number(b.dataset.step))));
@@ -628,7 +688,10 @@ function renderEngines() {
 function renderParams(box, inputs, values, onChange) {
   box.innerHTML = "";
   (inputs || []).forEach((spec) => {
-    const val = (values || {})[spec.key];
+    // Falling back to the declared default matters for a project saved before a
+    // setting existed: without it the control draws blank and posts blank back.
+    const stored = (values || {})[spec.key];
+    const val = stored === undefined ? spec.default : stored;
     const wrap = document.createElement("div");
     let control;
     if (spec.type === "enum") {
@@ -1003,6 +1066,141 @@ function startAudioPolling() {
   }, 2000);
 }
 
+// ------------------------------------------------------------------ video
+function currentVideoKey() {
+  return (P && P.video && P.video.profile) || (VIDEO && VIDEO.default) || "";
+}
+function currentVideoProfile() {
+  return VIDEO ? VIDEO.profiles[currentVideoKey()] : null;
+}
+
+// Runtime reads as m:ss. Seconds alone stop being legible somewhere around a
+// minute, and this number is a video length.
+function clock(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function renderVideo() {
+  if (!VIDEO || !P) return;
+
+  // ffmpeg's absence is a fact about the machine, not an error to hide: say so
+  // up front and disable the one button that needs it, rather than failing later.
+  const ff = VIDEO.ffmpeg || {};
+  // Disabled from the moment the panel draws, not once the plan arrives: a
+  // button that is briefly clickable is a button someone will click.
+  $("assembleBtn").disabled = !ff.available;
+  $("ffmpegState").innerHTML = ff.available
+    ? `<div class="note">${escapeHtml(tf("video.ffmpeg.ok", { version: ff.version || "ffmpeg" }))}</div>`
+    : `<div class="warn">${escapeHtml(t("video.ffmpeg.missing"))}<br>${escapeHtml(ff.hint || "")}</div>`;
+
+  const list = $("videoProfile");
+  list.innerHTML = "";
+  Object.values(VIDEO.profiles).forEach((v) => {
+    const div = document.createElement("div");
+    div.className = "engine" + (currentVideoKey() === v.key ? " sel" : "");
+    div.innerHTML = `<b>${escapeHtml(v.name)}</b>
+      <span>${escapeHtml(v.strength)}</span>
+      <span>${(v.badges || []).map((b) => `<span class='chip'>${escapeHtml(b)}</span>`).join(" ")}</span>`;
+    div.onclick = async () => {
+      try {
+        P = await api(`/projects/${P.id}/video/settings`, "POST", { profile: v.key });
+        clearAlerts(); renderAll(); refreshVideoPlan();
+      } catch (err) { alertBox(err); }
+    };
+    list.appendChild(div);
+  });
+
+  const profile = currentVideoProfile();
+  if (!profile) return;
+  renderParams($("videoParams"), profile.inputs, (P.video && P.video.params) || {},
+    async (params) => {
+      try {
+        P = await api(`/projects/${P.id}/video/settings`, "POST", { params });
+        clearAlerts(); renderAll(); refreshVideoPlan();
+      } catch (err) { alertBox(err); }
+    });
+
+  $("srtLink").href = `/api/projects/${P.id}/captions.srt`;
+  $("vttLink").href = `/api/projects/${P.id}/captions.vtt`;
+}
+
+async function refreshVideoPlan() {
+  if (!P || !P.scenes.length) { $("videoPlan").innerHTML = ""; return; }
+  try {
+    const plan = await api(`/projects/${P.id}/video/plan`, "POST");
+    VIDEO_PLAN = plan;
+    $("assembleBtn").disabled = !plan.count || !(plan.ffmpeg && plan.ffmpeg.available);
+    $("capsCount").textContent = plan.cues ? tf("video.cues", { count: plan.cues }) : "";
+
+    let html = "";
+    if (plan.skip.length) {
+      html += `<div class="warn">${escapeHtml(tf("video.skip", { count: plan.skip.length }))}</div>`;
+    }
+    if (plan.silent_scenes) {
+      html += `<div class="warn">${escapeHtml(tf("video.silent", { count: plan.silent_scenes }))}</div>`;
+    }
+    if (!plan.count) {
+      html += `<div class="note">${escapeHtml(t("video.nothing"))}</div>`;
+    } else {
+      // Estimated and measured runtimes must never be printed the same way.
+      html += `<div class="note">${escapeHtml(tf(
+        plan.runtime_measured ? "video.summary.measured" : "video.summary.estimated",
+        { count: plan.count, runtime: clock(plan.runtime_seconds),
+          width: plan.width, height: plan.height }))}</div>`;
+      html += `<table><tr><th>${escapeHtml(t("plan.th.n"))}</th><th>${escapeHtml(t("plan.th.scene"))}</th>
+        <th>${escapeHtml(t("video.th.at"))}</th><th>${escapeHtml(t("video.th.holds"))}</th></tr>` +
+        plan.scenes.map((r) => `<tr><td>${r.n}</td><td>${escapeHtml(r.title)}</td>
+          <td class="muted">${clock(r.start)}</td>
+          <td class="dur${r.measured ? " measured" : ""}">${r.duration.toFixed(1)}s</td></tr>`).join("") +
+        `</table>`;
+    }
+    $("videoPlan").innerHTML = html;
+  } catch (err) { $("videoPlan").innerHTML = `<div class="err">${escapeHtml(err.message)}</div>`; }
+}
+
+function renderVideoResult() {
+  const file = P && P.video && P.video.file;
+  if (!file) { $("videoOut").innerHTML = ""; return; }
+  const src = `/api/projects/${P.id}/video/${encodeURIComponent(file)}`;
+  $("videoOut").innerHTML =
+    `<p class="muted">${escapeHtml(tf("video.done", {
+       file, runtime: clock(P.video.seconds), width: P.video.width, height: P.video.height }))}</p>
+     <video src="${src}" controls preload="metadata" style="max-width:100%;border-radius:8px"></video>
+     <p><a class="btn ghost sm" href="${src}" download>${escapeHtml(t("video.download"))}</a></p>`;
+}
+
+async function doAssemble() {
+  try {
+    clearAlerts();
+    const res = await api(`/projects/${P.id}/video/assemble`, "POST");
+    if (!res.started) { alertBox(res.message, "note"); return; }
+    startVideoPolling();
+  } catch (err) { alertBox(err); }
+}
+
+function startVideoPolling() {
+  if (VIDEO_POLL) clearInterval(VIDEO_POLL);
+  $("cancelVideoBtn").classList.remove("hidden");
+  VIDEO_POLL = setInterval(async () => {
+    try {
+      P = await api(`/projects/${P.id}`);
+      const job = P.video_job;
+      if (job && job.running) {
+        const done = P.scenes.filter((s) => s.video_status === "done").length;
+        $("videoStatus").textContent = tf("video.encoding",
+          { done, total: job.scenes.length });
+      } else {
+        clearInterval(VIDEO_POLL); VIDEO_POLL = null;
+        $("cancelVideoBtn").classList.add("hidden");
+        $("videoStatus").textContent = "";
+        if (job && job.fatal) alertBox(tf("job.fatal", { error: job.fatal }));
+        renderVideoResult(); refreshVideoPlan();
+      }
+    } catch (err) { clearInterval(VIDEO_POLL); VIDEO_POLL = null; alertBox(err); }
+  }, 2000);
+}
+
 // ------------------------------------------------------------------ load
 function renderAll() {
   $("projName").value = P.name || "";
@@ -1017,9 +1215,11 @@ function renderAll() {
   $("detectedLang").textContent = label ? tf("lang.detected", { language: label }) : t("lang.undetected");
   updateStoryCount();
   renderEngines(); renderVoices(); renderScenes(); renderGallery();
+  renderVideo(); renderVideoResult();
   $("cbSpent").textContent = money((P.spend && P.spend.actual) || 0);
   if (P.job && P.job.running && !POLL) startPolling();
   if (P.audio_job && P.audio_job.running && !TTS_POLL) startAudioPolling();
+  if (P.video_job && P.video_job.running && !VIDEO_POLL) startVideoPolling();
 }
 
 function updateStoryCount() {
@@ -1046,6 +1246,7 @@ async function boot() {
   harvestStrings();
   ENGINES = await api("/engines");
   VOICES = await api("/voices");
+  VIDEO = await api("/video-profiles");
   STATUS = await api("/status");
   renderKeys();
   const have = await loadProjects();
@@ -1151,13 +1352,25 @@ $("cancelBtn").onclick = async () => {
   catch (err) { alertBox(err); }
 };
 
+$("assembleBtn").onclick = doAssemble;
+$("cancelVideoBtn").onclick = async () => {
+  try { const r = await api(`/projects/${P.id}/video/cancel`, "POST");
+        alertBox(r.cancelling ? t("cancel.started") : t("cancel.idle"), "note"); }
+  catch (err) { alertBox(err); }
+};
+
 $("exportBtn").onclick = async () => {
   clearAlerts();
   try {
     const res = await api(`/projects/${P.id}/export`, "POST", { flatten: $("flatten").checked });
     $("exportMsg").textContent = tf("export.written", { count: res.files.length });
+    // The hand-off files are the point of the export for an editor, so they are
+    // named individually rather than left to be discovered in the folder.
+    const extras = [res.captions, res.captions_vtt, res.timing, res.video].filter(Boolean);
     $("exportOut").innerHTML =
       `<div class="note">${escapeHtml(tf("export.dir", { dir: res.dir }))}</div>` +
+      (extras.length ? `<div class="note">${escapeHtml(tf("export.extras", {
+        files: extras.join(", "), runtime: clock(res.runtime_seconds) }))}</div>` : "") +
       `<table><tr><th>${escapeHtml(t("export.th.n"))}</th><th>${escapeHtml(t("export.th.image"))}</th>
         <th>${escapeHtml(t("export.th.narration"))}</th><th>${escapeHtml(t("export.th.audio"))}</th></tr>` +
       res.files.map((f) => `<tr><td>${f.scene}</td><td><code>${escapeHtml(f.image)}</code></td>
