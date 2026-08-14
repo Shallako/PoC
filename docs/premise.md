@@ -50,12 +50,34 @@ A 12-scene Shoulico story runs 60-90 seconds. That is not a coincidence; it is
 the target.
 
 **The honest caveat.** These figures prove where attention sits -- short, vertical,
-captioned, sound-on. They do **not** prove that a narrated sequence of stills
-performs as well in that feed as shot footage does. Slideshow-style and
-"faceless" narrated content is visibly abundant on both platforms, but we have
-not measured its performance against ours, and no figure in this document claims
-we have. **That is the first experiment to run**, and it is the assumption the
-rest of the business rests on.
+captioned, sound-on. They do not, on their own, prove that a sequence of *stills*
+holds up in that feed. The nearest measured evidence says stills are more than
+viable, and it is worth reading exactly rather than cherry-picking.
+
+Buffer's analysis of **52m+ posts** ranks Instagram formats by engagement per
+person reached: **carousels 6.90%, single images 4.44%, Reels 3.31%**. Stills
+beat video on engagement by roughly 2x. But Reels win the other half: **+36%
+reach over carousels and +125% over single images**. Instagram is effectively two
+platforms -- video buys reach, stills buy engagement.
+
+TikTok is where the evidence conflicts, and we should say so. Buffer puts TikTok
+video at **3.39%** against images at **1.92%** -- stills losing. A separate
+Fanpage Karma study of **698,000 posts** (Jan-May 2025) reports the opposite:
+carousels at **+81% engagement** over comparable video. Two credible firms, two
+sample windows, opposite signs. Neither should be quoted alone.
+
+And the deeper limit applies to both: **every one of these studies measures
+swipeable carousels, not an auto-playing narrated video assembled from stills.**
+That is our format and nobody has benchmarked it. So the claim this document
+makes is the defensible one -- stills-based content demonstrably performs on
+these platforms -- and **not** that our specific output matches shot footage.
+Measuring that is first-party work: post a set, read the retention curve. It is
+the assumption the rest of the business rests on, and it is cheap to test.
+
+One implication worth noting: the top-engagement Instagram format is the carousel,
+and a carousel is exactly what this pipeline already produces internally -- one
+still and one text block per scene, before assembly. Exporting to the highest-
+engagement format is close to free from where the code already stands.
 
 ## 2. Everyone needs it. Almost nobody can make it.
 
@@ -278,6 +300,11 @@ Get that right and the draft is not a compromise. It is where the work starts.
 - [DataReportal -- Digital 2026 Global Overview Report](https://datareportal.com/reports/digital-2026-global-overview-report) -- time per day by platform, 5.66bn social identities, 94.6% monthly online-video reach.
 - [CNBC, 20 Jan 2026 -- "Most of Instagram's ads ran on Reels in 2025"](https://www.cnbc.com/2026/01/20/most-of-instagrams-ads-ran-on-reels-in-2025-data-shows.html) -- >50% of IG ads on Reels (from 35%); US Reels at 46% of time spent (from 37%). Sensor Tower / Meta data.
 - [Tubefilter, 30 Oct 2025 -- Meta Q3 2025 earnings call](https://www.tubefilter.com/2025/10/30/meta-reels-ad-revenue-q3-2025-earnings-report/) -- Zuckerberg on Reels' $50bn annual run rate.
+
+**Format performance (stills vs video)**
+- [Buffer -- State of Social Media Engagement 2026](https://buffer.com/resources/state-of-social-media-engagement-2026/) -- 52m+ posts across 10 platforms through 3 Dec 2025; Instagram format breakdown from 4m+ posts, Jan 2022 - Oct 2024. Engagement defined as likes + comments + saves + shares as a percentage of reach. Instagram: carousels 6.90%, single images 4.44%, Reels 3.31%; Reels reach +36% vs carousels, +125% vs single images. TikTok: video 3.39%, images 1.92%.
+- Fanpage Karma, 698,000 TikTok posts Jan-May 2025 -- carousels +81% engagement and +82% likes vs comparable video, but 33% fewer shares. Reported via secondary coverage; **directly contradicts Buffer's TikTok figures** and should be re-verified at source before either is used in a deck.
+- No published study measures an auto-playing narrated slideshow, which is what this product outputs. Treat all of the above as adjacent-format proxies.
 
 **Demand and barriers**
 - [Wyzowl -- State of Video Marketing 2026](https://wyzowl.com/video-marketing-statistics/) -- 91% of businesses use video; 82% report good ROI; barrier breakdown (cost 24%, time 19%, don't know where to start 10%); 71% on 30s-2min; 63% used AI video tools, up from 51%; 84% of consumers want more brand video.
