@@ -6,6 +6,17 @@ out. About a dollar, in minutes.**
 *Investor brief, August 2026. Every figure is sourced at the foot of the
 document; the technical picture is in the [README](../README.md).*
 
+> **Say plainly what the output is.** Shoulico does **not** generate moving
+> footage. It generates one **still image per scene** and stitches those stills
+> into a video -- each one held for exactly as long as its narration line runs,
+> with an optional slow Ken Burns zoom over it, spoken narration on top and
+> burned or soft captions. Technically: a narrated slideshow rendered to MP4.
+>
+> That is the honest description, and section 7 argues it is the right product
+> decision rather than a limitation we are working around. Anyone evaluating
+> this should read the claim as *"the format that already fills these feeds,
+> produced for a dollar"* -- not as animation, and not as generated video.
+
 ---
 
 ## 1. The format won. That part is settled.
@@ -37,6 +48,14 @@ Two numbers that matter more than the rest for what we are building:
 
 A 12-scene Shoulico story runs 60-90 seconds. That is not a coincidence; it is
 the target.
+
+**The honest caveat.** These figures prove where attention sits -- short, vertical,
+captioned, sound-on. They do **not** prove that a narrated sequence of stills
+performs as well in that feed as shot footage does. Slideshow-style and
+"faceless" narrated content is visibly abundant on both platforms, but we have
+not measured its performance against ours, and no figure in this document claims
+we have. **That is the first experiment to run**, and it is the assumption the
+rest of the business rests on.
 
 ## 2. Everyone needs it. Almost nobody can make it.
 
@@ -85,8 +104,14 @@ been given is a tool that starts from *the way a person actually talks*.
 ## 4. What Shoulico is
 
 You paste what you would say out loud -- a paragraph, a memory, a pitch, a
-bedtime story. It comes back as an ordered set of scenes, each one rendered as a
-picture, spoken aloud, and cut into a finished vertical video with captions.
+bedtime story. It comes back as an ordered set of scenes. Each scene gets **one
+still image**, one spoken narration line, and one caption block. Those stills are
+then stitched into a single MP4, each held for the exact length of its own
+narration.
+
+To be unambiguous: **there is no moving footage anywhere in the pipeline.** The
+only motion is an optional slow zoom across a still image. What plays back is a
+narrated, captioned sequence of pictures.
 
 No storyboard. No prompt vocabulary. No editing timeline.
 
@@ -96,8 +121,9 @@ No storyboard. No prompt vocabulary. No editing timeline.
    editable text. This is where you disagree with it.
 3. **Render the pictures.** Price shown before you spend; you have to say yes.
 4. **Hear it spoken.** Pick a voice, confirm, every line is read aloud.
-5. **Get the video.** Assembled on your own machine -- free -- with each picture
-   held exactly as long as its narration runs. 9:16, 1:1 or 16:9.
+5. **Get the video.** The stills are stitched on your own machine -- free -- each
+   held exactly as long as its narration runs, with an optional Ken Burns zoom.
+   9:16, 1:1 or 16:9.
 6. **Take it away.** Images, audio, captions, timing sheet and MP4 in one folder.
 
 Steps 1, 2, 5 and 6 cost nothing. Only rendering and speaking spend money, and
@@ -142,7 +168,11 @@ with, which is exactly the behaviour that makes people iterate.
 | Time | minutes | days to weeks |
 | Changing your mind | retype a sentence | renegotiate |
 
-That is a **1,000-10,000x** cost delta on the first pass.
+That is a **1,000-10,000x** cost delta on the first pass -- and it is deliberately
+not a like-for-like comparison. A narrated sequence of stills is not a shot film,
+and nobody should read that row as "Shoulico replaces a production company." It
+replaces the *document and the conversation* that currently stand in for a
+production before one is commissioned.
 
 The expensive decisions in any visual project -- how many scenes, what order,
 what it sounds like, how long it runs, whether the idea works at all -- are
@@ -172,6 +202,20 @@ A 12-scene story, all in:
 
 No GPU fleet. No inference capex. Generation is a metered pass-through; assembly
 is the user's own CPU. Cost of goods scales with usage instead of preceding it.
+
+**This is where stills earn their place.** Generated video clips are 20-40x the
+price of a still -- twelve scenes is roughly $1 in images against **$10-$68 in
+clips**, priced off the live model catalogue. They also come back at a fixed
+length of about 4-8 seconds against narration lines that commonly run 5-15
+seconds, silent, unjoined, and needing exactly the same local assembly step
+afterwards. So buying motion does not remove any work; it adds cost on top of it
+and takes away the ability to hold a beat for as long as the sentence needs.
+
+A still holds any length for free. That is the entire argument, and it is a
+pricing argument rather than a technical one -- if clip prices fall or lengths
+become variable, the same architecture picks them up as an opt-in upgrade for
+hero shots. The scene-by-scene structure, the measured timings and the assembly
+step do not change.
 
 This is not a theoretical advantage. **OpenAI's Sora is the control experiment.**
 Launched September 2025 as a pure AI-video destination, it peaked at ~3.3 million
@@ -203,18 +247,17 @@ A working local application, verified end to end:
 - Narration through ElevenLabs Flash v2.5, with duration **measured off the
   delivered audio** rather than estimated -- so captions and image timing cannot
   drift from the voice.
-- Local ffmpeg assembly: Ken Burns motion, broadcast-convention captions, soft or
-  burned-in subtitles, proven against a real encode (12.02s output against a
-  12.0s timeline).
+- Local ffmpeg assembly of the stills into one MP4: Ken Burns zoom over each
+  still, broadcast-convention captions, soft or burned-in subtitles, proven
+  against a real encode (12.02s output against a 12.0s timeline).
 - **140 automated tests**, all offline and free, including a fake Renderful HTTP
   server so the retry ladder, poll loop and failure classes execute for real.
 
-Deliberately **not** built, with the reasoning recorded: generated video clips
-(20-40x the cost of a still, fixed length against variable narration, and they
-still leave the assembly to be done); accounts, billing and sharing. Motion today
-is Ken Burns over generated stills -- the format that already fills these feeds --
-and generated clips are priced as an opt-in upgrade for hero shots, not a
-dependency.
+Deliberately **not** built, with the reasoning recorded in the repository:
+generated video clips (section 7); accounts, billing and sharing. **Every frame
+that plays back today originates as a still image.** The only motion is the Ken
+Burns zoom, and the only sound is the narration -- no music bed, no effects, no
+transitions between scenes beyond a hard cut.
 
 ## 9. The bet
 
