@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TypedDict
 
 PKG_DIR = Path(__file__).resolve().parent
 APP_DIR = PKG_DIR.parent                     # holds run.py, engines.json, projects/
@@ -146,7 +147,20 @@ def anthropic_key() -> str | None:
     return _from_file(APP_DIR / "anthropic_key.txt", APP_DIR.parent / "anthropic_key.txt")
 
 
-def key_status() -> dict:
+class KeyStatus(TypedDict):
+    """Everything the browser is allowed to know about the keys.
+
+    Spelled out rather than returned as a bare dict so a caller reading
+    `status["anthropic_warning"]` is checked, not guessed at -- and so a typo in
+    a key name is an error where it is written instead of a silent None.
+    """
+
+    renderful: bool
+    anthropic: bool
+    anthropic_warning: str | None
+
+
+def key_status() -> KeyStatus:
     """Presence + a shape sanity check. The keys themselves never leave the server.
 
     A key that is present but malformed is worse than a missing one: it shows a
