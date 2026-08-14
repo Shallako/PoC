@@ -1,7 +1,7 @@
 # Shoulico -- a story orchestrator
 
-**Plain conversational text in. A finished, captioned, narrated vertical video
-out. About a dollar, in minutes.**
+**Plain conversational text in. A set of story images, spoken narration, and a
+captioned vertical MP4 that plays them in sequence. About a dollar, in minutes.**
 
 *Investor brief, August 2026. Every figure is sourced at the foot of the
 document; the technical picture is in the [README](../README.md).*
@@ -12,10 +12,16 @@ document; the technical picture is in the [README](../README.md).*
 > with an optional slow Ken Burns zoom over it, spoken narration on top and
 > burned or soft captions. Technically: a narrated slideshow rendered to MP4.
 >
+> **We call it a narrated slideshow, and we use that phrase throughout.** The
+> file really is an MP4 and really does upload to the video slot on TikTok and
+> Instagram, so refusing the word "video" would be its own kind of inaccuracy --
+> but the bare word, in an AI pitch, is heard as generated footage. So it never
+> appears here without its qualifier.
+>
 > That is the honest description, and section 8 argues it is the right product
 > decision rather than a limitation we are working around. Anyone evaluating
 > this should read the claim as *"the format that already fills these feeds,
-> produced for a dollar"* -- not as animation, and not as generated video.
+> produced for a dollar"* -- not as animation, and not as generated footage.
 
 ---
 
@@ -136,6 +142,13 @@ narration.
 To be unambiguous: **there is no moving footage anywhere in the pipeline.** The
 only motion is an optional slow zoom across a still image. What plays back is a
 narrated, captioned sequence of pictures.
+
+**And that is the architecture, not a caveat.** The durable asset is the *scene
+set* -- images, narration, and measured timings. The MP4 is one packaging of it.
+The timing sheet and subtitles are another, for an editor. The carousel export
+(section 1) is a third, and lands on Instagram's highest-engagement format
+precisely *because* the underlying asset is stills rather than footage. A product
+whose primitive was generated video could not produce any of the other two.
 
 No storyboard. No prompt vocabulary. No editing timeline.
 
