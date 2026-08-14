@@ -3,7 +3,8 @@
 Story -> scenes -> engine-targeted prompts -> images -> narration script ->
 narration audio -> video -> export.
 
-*What this is for, without the implementation: [docs/premise.md](docs/premise.md).*
+*What this is for and the market case for it, without the implementation:
+[docs/premise.md](docs/premise.md).*
 
 Image creation defaults to **Seedream 5.0 Pro** through the Renderful API, with
 **Nano Banana Pro** and **GPT Image 2** as alternatives -- those two also declare
