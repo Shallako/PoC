@@ -12,7 +12,7 @@ document; the technical picture is in the [README](../README.md).*
 > with an optional slow Ken Burns zoom over it, spoken narration on top and
 > burned or soft captions. Technically: a narrated slideshow rendered to MP4.
 >
-> That is the honest description, and section 7 argues it is the right product
+> That is the honest description, and section 8 argues it is the right product
 > decision rather than a limitation we are working around. Anyone evaluating
 > this should read the claim as *"the format that already fills these feeds,
 > produced for a dollar"* -- not as animation, and not as generated video.
@@ -77,7 +77,9 @@ the assumption the rest of the business rests on, and it is cheap to test.
 One implication worth noting: the top-engagement Instagram format is the carousel,
 and a carousel is exactly what this pipeline already produces internally -- one
 still and one text block per scene, before assembly. Exporting to the highest-
-engagement format is close to free from where the code already stands.
+engagement format is close to free from where the code already stands, and is
+scoped at half a day for a usable first version in
+[carousel-export.md](carousel-export.md).
 
 ## 2. Everyone needs it. Almost nobody can make it.
 
@@ -211,7 +213,61 @@ The draft is not a dead end you abandon. It is the plan the serious version gets
 built from. That is what makes it sellable to a professional buyer and not just
 a hobbyist one.
 
-## 7. The unit economics, and the lesson from Sora
+## 7. Two buyers outside marketing, with the same problem
+
+The cost of a *visual draft* is the constraint in more places than social media.
+Two of them are large, underserved, and reachable without a sales team.
+
+### Educators
+
+**3.24 million** K-12 classroom teachers in the US alone. **79%** use video as
+part of regular instruction, and about three quarters use YouTube specifically --
+spending an average of **17.9% of yearly instructional time** on video.
+
+They are already video-native. What they cannot do is make video *about their own
+lesson*, so they borrow something generic and adapt the lesson to the clip they
+found. Shoulico inverts that: paste the lesson, get a 90-second narrated
+sequence about exactly this week's material, in the language of the classroom.
+
+The cost framing is unusually sharp here, because teachers pay out of their own
+pockets. **94%** spend unreimbursed, averaging **$895 a year**. That single
+figure buys **hundreds** of Shoulico stories. A tool that costs a dollar a lesson
+does not need a district procurement cycle to get adopted -- which is the actual
+reason most edtech dies.
+
+Two features already built matter more to this segment than to any other. The
+story's **detected language carries through** narration and interface, which is
+an ESL and bilingual-classroom feature that nobody asked us to build. And the
+**timing sheet plus captions** make every output accessible by default rather
+than as a compliance afterthought.
+
+### Aspiring and self-publishing writers
+
+**3.5 million titles** were self-published in 2025, over **1.4 million** through
+Amazon KDP alone. And the economics of that population are the whole point:
+**75% earn under $1,000 a year**. Upfront cost is the binding constraint, not
+taste and not ambition.
+
+Consider the clearest case. A 32-page illustrated picture book costs **$3,000 to
+$10,000** to have drawn, at $100-$500 per page. Shoulico renders 32 stills, in
+one consistent style block, with the text read aloud, for **about $1.50**.
+
+That is not a replacement for an illustrator and this document should not pretend
+otherwise -- see the boundary below. It is the thing that comes *before* hiring
+one: see whether the story works as a sequence, find out that scene 19 is dead,
+show a publisher or a co-author what you mean, cut a book trailer, or test three
+openings against each other in an afternoon. Writers currently make that call
+from a manuscript and hope.
+
+**The honest boundary for both segments.** These are drafts. The shared style
+block holds a consistent *look* across a set, but the app does not do reference-
+image conditioning, so **a recurring character's face is not guaranteed to stay
+the same from scene to scene**. For a lesson sequence or a story-shape test that
+does not matter. For a finished picture book it matters completely, and anyone
+buying this for that purpose will be disappointed. Character consistency is a
+known, solvable engineering problem and is not solved here today.
+
+## 8. The unit economics, and the lesson from Sora
 
 A 12-scene story, all in:
 
@@ -258,7 +314,7 @@ valued at $215M by SoftBank. Every one of them sells to someone who *already
 knows* they need video and already has assets. **None of them start from a
 paragraph a person wrote in their own voice.**
 
-## 8. What is built today
+## 9. What is built today
 
 A working local application, verified end to end:
 
@@ -276,12 +332,12 @@ A working local application, verified end to end:
   server so the retry ladder, poll loop and failure classes execute for real.
 
 Deliberately **not** built, with the reasoning recorded in the repository:
-generated video clips (section 7); accounts, billing and sharing. **Every frame
+generated video clips (section 8); accounts, billing and sharing. **Every frame
 that plays back today originates as a still image.** The only motion is the Ken
 Burns zoom, and the only sound is the narration -- no music bed, no effects, no
 transitions between scenes beyond a hard cut.
 
-## 9. The bet
+## 10. The bet
 
 Generation is cheap and getting cheaper. Judgment is not.
 
@@ -310,6 +366,15 @@ Get that right and the draft is not a compromise. It is where the work starts.
 - [Wyzowl -- State of Video Marketing 2026](https://wyzowl.com/video-marketing-statistics/) -- 91% of businesses use video; 82% report good ROI; barrier breakdown (cost 24%, time 19%, don't know where to start 10%); 71% on 30s-2min; 63% used AI video tools, up from 51%; 84% of consumers want more brand video.
 - [SBA Office of Advocacy, 30 Jun 2025](https://advocacy.sba.gov/2025/06/30/new-advocacy-report-shows-the-number-of-small-businesses-in-the-u-s-exceeds-36-million/) -- 36.2m US small businesses.
 - [eMarketer, 2026](https://emarketer.com/content/small-businesses-see-social-media-their-clearest-path-growth-2026) -- 68% of SMB owners (Constant Contact, Jan 2026, AU/CA/NZ/UK/US); 33% of small businesses on TikTok, up from 17% in 2023 (SBE Council).
+
+**Educators**
+- [NEA -- Rankings of the States 2024 and Estimates of School Statistics 2025](https://www.nea.org/sites/default/files/2025-04/2025_rankings_and_estimates_report.pdf) -- 3,241,820 K-12 classroom teachers, 2024-25.
+- [AdoptAClassroom.org -- 2025 Teacher Spending Survey](https://www.adoptaclassroom.org/2025/06/09/2025-teacher-survey-spending-stats-classroom-needs/) and [NEA on out-of-pocket spending](https://www.nea.org/nea-today/all-news-articles/out-pocket-spending-school-supplies-adds-strain-educators) -- $895 average out-of-pocket for 2024-25; 94% of K-12 teachers spend unreimbursed. Survey populations differ (one is grant applicants, which skews high), so treat $895 as the upper of a $600-$900 range.
+- [The Conversation, 2025 -- teachers and YouTube](https://theconversation.com/class-lets-watch-a-short-video-more-than-75-of-teachers-say-they-use-youtube-in-the-classroom-288250) -- ~75% of 393 US preschool/K-12 teachers use YouTube instructionally; 17.9% of yearly instructional time. **Small sample -- 393 teachers.** The 79% "use video in regular instruction" figure dates to 2019 and should be refreshed.
+
+**Writers and self-publishing**
+- [Publishers Weekly -- self-publishing output](https://www.publishersweekly.com/pw/by-topic/industry-news/publisher-news/article/96468-self-publishing-s-output-and-infuence-continue-to-grow.html) and [self-publishing statistics compilations](https://bestwriting.com/self-publishing-statistics) -- ~3.5m titles self-published in 2025, 1.4m+ via KDP; 75% of self-published authors earn under $1,000/yr. Bowker ISBN counts undercount KDP (which issues free ASINs), so these are directional.
+- [Children's book illustration pricing guides, 2026](https://hmdpublishing.com/blog/children-s-book-illustration-cost-guide) -- $100-$500 per page typical, $3,000-$10,000 for a 32-page picture book. Vendor-published rate cards, not a survey.
 
 **Production cost**
 - [Vidico -- Video Production Cost 2026](https://vidico.com/news/video-production-cost/) and [Synthesia -- Cost of Video Production](https://www.synthesia.io/learn/video-production/cost) -- $1,000-$10,000 per finished minute, from Clutch agency survey data. Vendor-compiled; treat as an industry range, not an audited figure.
