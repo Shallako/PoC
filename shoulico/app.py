@@ -38,6 +38,11 @@ class ScenePatch(BaseModel):
     narration: str | None = None
 
 
+class CastPatch(BaseModel):
+    slug: str
+    description: str | None = None
+
+
 class ProjectPatch(BaseModel):
     name: str | None = None
     story: str | None = None
@@ -50,6 +55,8 @@ class ProjectPatch(BaseModel):
     prompt_language: str | None = None
     narration: dict | None = None
     scenes: list[ScenePatch] | None = None
+    consistency: str | None = None
+    cast: list[CastPatch] | None = None
 
 
 class SegmentRequest(BaseModel):
@@ -146,23 +153,44 @@ def _prompt_language(value: str | None) -> str:
 def _decorate(project: dict) -> dict:
     """Add derived, non-persisted fields for the UI."""
     dialect = engines.engine(project["engine"]).get("dialect", {})
+    using_cast = orchestrator.consistency_on(project)
+    versions = (orchestrator.plan_cast(project)["versions"] if using_cast else {})
+
     scenes = []
     for scene in sorted(project.get("scenes", []), key=lambda s: s["n"]):
         prompt = compiler.compile_prompt(scene.get("body", ""),
                                          project.get("style_profile", ""), dialect)
         text = scene.get("narration") or ""
         count, unit, seconds = narration_mod.measure(text)
+        tokens = (orchestrator.scene_tokens(project, scene, versions)
+                  if using_cast else [])
+        stale_refs = bool(scene.get("asset")) and list(
+            scene.get("asset_refs") or []) != tokens
         scenes.append({
             **scene,
             "compiled_prompt": prompt,
             "prompt_chars": len(prompt),
-            "dirty": bool(scene.get("asset")) and scene.get("asset_prompt") != prompt,
+            # "dirty" is what the gallery badges, and a scene whose anchor moved
+            # is every bit as out of date as one whose prompt did -- the picture
+            # on screen is not the picture this project would produce now.
+            "dirty": bool(scene.get("asset")) and (
+                scene.get("asset_prompt") != prompt or stale_refs),
+            "stale_references": stale_refs,
             "narration_words": count,
             "narration_unit": unit,
             "narration_seconds": seconds,
         })
     out = dict(project)
     out["scenes"] = scenes
+    out["consistency_active"] = using_cast
+    out["supports_references"] = engines.supports_references(project["engine"])
+    out["cast"] = [
+        {**member,
+         "anchor_prompt": orchestrator.anchor_prompt(project, member),
+         "dirty": bool(member.get("asset")) and (
+             member.get("asset_prompt") != orchestrator.anchor_prompt(project, member))}
+        for member in (project.get("cast") or [])
+    ]
     # Show the browser the values that would actually be sent. A project saved
     # under an older voice name still holds it, and a control whose stored value
     # matches no option silently displays the first one instead -- so the page
@@ -344,6 +372,28 @@ def api_patch(pid: str, body: ProjectPatch) -> dict:
             # The video sibling belongs to the engine, so switching engine
             # replaces its settings rather than carrying Veo's frame over to Sora.
             project["clip_params"] = engines.clip_defaults(body.engine)
+            # An engine with no reference sibling cannot hold a face steady, so
+            # the mode follows the engine rather than sitting on claiming to.
+            if not engines.supports_references(body.engine):
+                project["consistency"] = config.CONSISTENCY_OFF
+        if body.consistency is not None:
+            if body.consistency not in config.CONSISTENCY_MODES:
+                raise engines.ParamError(
+                    f"Consistency: {body.consistency!r} is not one of "
+                    f"{', '.join(config.CONSISTENCY_MODES)}")
+            if (body.consistency == config.CONSISTENCY_CAST
+                    and not engines.supports_references(project["engine"])):
+                raise engines.ParamError(
+                    f"{engines.engine(project['engine'])['name']} has no "
+                    f"reference-image model, so it cannot hold characters "
+                    f"consistent. Pick another engine or turn this off.")
+            project["consistency"] = body.consistency
+        if body.cast is not None:
+            by_slug = {c.get("slug"): c for c in project.get("cast") or []}
+            for patch in body.cast:
+                member = by_slug.get(patch.slug)
+                if member is not None and patch.description is not None:
+                    member["description"] = patch.description.strip()
         if body.params is not None:
             merged = {**project.get("params", {}), **body.params}
             project["params"] = engines.validate(project["engine"], merged)
@@ -431,11 +481,23 @@ def api_segment(pid: str, body: SegmentRequest) -> dict:
                 "detail": "",
                 "asset": old.get("asset"),
                 "asset_prompt": old.get("asset_prompt"),
+                "asset_refs": list(old.get("asset_refs") or []),
+                "cast": list(s.get("cast") or []),
                 "seed": old.get("seed"),
                 "cost": old.get("cost"),
                 "generation_id": old.get("generation_id"),
             })
         proj["scenes"] = scenes
+        # A character whose description is unchanged keeps the portrait already
+        # paid for; re-segmenting a story must not silently re-buy the cast.
+        was = {c.get("slug"): c for c in proj.get("cast") or []}
+        proj["cast"] = [
+            {**member,
+             **{k: v for k, v in was.get(member["slug"], {}).items()
+                if k in ("asset", "asset_prompt", "version", "source_url",
+                         "generation_id", "cost")}}
+            for member in result.get("cast", [])
+        ]
         proj["style_profile"] = result["style_profile"]
         proj["style_hint"] = hint
         proj["scene_count"] = len(scenes)
@@ -488,6 +550,19 @@ def api_image(pid: str, name: str):
     path = store.images_dir(pid) / safe
     if not path.is_file():
         raise HTTPException(404, "No such image")
+    return FileResponse(path)
+
+
+@app.get("/api/projects/{pid}/cast/{name}")
+def api_cast_image(pid: str, name: str):
+    """A character's reference portrait. Its own route because anchors live
+    outside images/ -- everything that reads images/ counts what it finds there
+    as scenes."""
+    _load(pid)
+    safe = Path(name).name
+    path = store.cast_dir(pid) / safe
+    if not path.is_file():
+        raise HTTPException(404, "No such reference portrait")
     return FileResponse(path)
 
 

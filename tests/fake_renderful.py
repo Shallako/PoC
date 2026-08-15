@@ -78,6 +78,11 @@ class FakeRenderful:
         self.submit_flaky: list[int] = []
         self.polls_before_complete = 1
         self.fail_generation: set[str] = set()
+        # Fail whichever generation carries this text in its prompt. `gen-N` ids
+        # are handed out in arrival order, and workers run concurrently, so
+        # targeting a specific generation by id is only deterministic when the
+        # thing under test is single-threaded. Content is stable either way.
+        self.fail_prompt_containing: str | None = None
         self.fail_all_generations = False
         self.no_outputs = False
         self.download_status = 200
@@ -135,6 +140,20 @@ class FakeRenderful:
             return [s["payload"] for s in self.submits
                     if s["payload"].get("type") == gen_type]
 
+    def references_sent(self) -> list[list[str]]:
+        """The `images` array of every submission that carried one, in order."""
+        with self.lock:
+            return [list(s["payload"]["images"]) for s in self.submits
+                    if s["payload"].get("images")]
+
+    def payload_for_prompt(self, needle: str) -> dict | None:
+        """The first submission whose prompt contains `needle`."""
+        with self.lock:
+            for s in self.submits:
+                if needle in s["payload"].get("prompt", ""):
+                    return s["payload"]
+            return None
+
     def reset_counters(self) -> None:
         with self.lock:
             self.submits.clear()
@@ -179,7 +198,9 @@ class FakeRenderful:
                 return 404, {"message": f"no generation {gid}"}
             gen["polls"] += 1
 
-            if self.fail_all_generations or gid in self.fail_generation:
+            targeted = (self.fail_prompt_containing is not None
+                        and self.fail_prompt_containing in gen.get("prompt", ""))
+            if self.fail_all_generations or gid in self.fail_generation or targeted:
                 self._close(gid)
                 return 200, {"id": gid, "status": "failed",
                              "error": "the engine rejected this prompt"}

@@ -142,12 +142,26 @@ STYLE_PROFILE = (
 )
 
 
+# Two recurring characters, because one would not catch an ordering bug and a
+# scene with only one of them is what proves references are selected per scene
+# rather than sent wholesale.
+CAST = [
+    {"name": "the narrator",
+     "description": "A lean man of twenty-two in a white tank top, close-cropped "
+                    "hair, a thin scar through his left eyebrow."},
+    {"name": "the cousin",
+     "description": "A broad man of thirty-one in a red baseball cap he never "
+                    "removes, heavy beard, gold ring on his right hand."},
+]
+
+
 def default_segment(kwargs: dict) -> dict:
     user = kwargs["messages"][0]["content"]
     count = _count_from(user, r"exactly (\d+) visual beats")
     return {
         "language": {"code": "en", "name": "English", "native_name": "English"},
         "style_profile": STYLE_PROFILE,
+        "cast": [dict(c) for c in CAST],
         "scenes": [
             {
                 "ordinal": i,
@@ -155,6 +169,10 @@ def default_segment(kwargs: dict) -> dict:
                 "beat": f"What happens in beat {i}.",
                 "prompt": (f"Wide shot of beat {i}, two men on a porch at dusk, "
                            f"moths around a bare bulb, exactly four players at the table."),
+                # Beat 2 is the narrator alone: a scene that references a subset
+                # is the one that fails if references are sent per project.
+                "cast": ([CAST[0]["name"]] if i == 2
+                         else [c["name"] for c in CAST]),
             }
             for i in range(1, count + 1)
         ],

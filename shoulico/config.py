@@ -39,6 +39,41 @@ NARRATION_WPM = 150
 NARRATION_CPM = 350                           # for unspaced scripts (zh/ja)
 
 # --------------------------------------------------------------------------- #
+# Character consistency
+#
+# A shared style block holds a consistent *look* across a set but cannot hold an
+# identity: "a woman of thirty with dark hair" is a different woman in every
+# scene. Identity needs the picture itself, so one reference portrait per
+# recurring character is rendered first and passed to every scene that character
+# appears in, as an image-to-image reference.
+# --------------------------------------------------------------------------- #
+
+CONSISTENCY_CAST = "cast"                     # anchor every recurring character
+CONSISTENCY_OFF = "off"                       # text-to-image only, as before
+CONSISTENCY_MODES = (CONSISTENCY_CAST, CONSISTENCY_OFF)
+DEFAULT_CONSISTENCY = CONSISTENCY_CAST
+
+# Seedream 5.0 Pro accepts 2-10 references per request (catalog, 2026-08-15) and
+# is the lowest ceiling among the engines that support references at all, so it
+# sets the app-wide cap. A story with more recurring characters than this still
+# renders -- the scene passes the ones it names first.
+MAX_REFERENCES_PER_SCENE = 10
+# Each anchor is one extra billed image, so this bounds what "by default" can
+# cost: a 12-scene story with 6 anchors is 18 images, not 12.
+MAX_CAST = 6
+
+# Anchors are rendered as reference portraits, not as story scenes: one figure,
+# plain background, even light, nothing happening. A busy anchor teaches the
+# model the background as much as the face.
+ANCHOR_ASPECT_RATIO = "1:1"
+ANCHOR_STYLE_SUFFIX = (
+    "Full figure, standing, facing the camera, neutral expression, arms at sides. "
+    "Plain flat mid-grey background, even soft lighting, no props, no scenery, "
+    "no text. Reference sheet for a single character."
+)
+
+
+# --------------------------------------------------------------------------- #
 # Narration audio (TTS)
 # --------------------------------------------------------------------------- #
 

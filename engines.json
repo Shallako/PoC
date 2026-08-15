@@ -79,7 +79,12 @@
           "default": "png",
           "help": "Renderful delivers JPEG regardless; the file is saved as delivered."
         }
-      ]
+      ],
+      "ref": {
+        "model": "seedream-5.0-pro-i2i",
+        "max_refs": 10,
+        "verified": false
+      }
     },
     "custom": {
       "name": "Custom Renderful model",
@@ -294,6 +299,11 @@
             "required": false
           }
         ]
+      },
+      "ref": {
+        "model": "nano-banana-2-i2i",
+        "max_refs": 10,
+        "verified": false
       }
     },
     "gpt-image-2": {
@@ -437,6 +447,11 @@
             "required": false
           }
         ]
+      },
+      "ref": {
+        "model": "gpt-image-2-i2i",
+        "max_refs": 10,
+        "verified": false
       }
     }
   },

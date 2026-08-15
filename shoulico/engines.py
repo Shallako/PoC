@@ -54,6 +54,12 @@ DEFAULT_REGISTRY: dict[str, Any] = {
                     "so the scene body is sent first and the shared style block after it.",
                 ],
             },
+            # Reference-conditioned sibling, for character consistency. Same
+            # price band as the text-to-image entry above, pair for pair
+            # (GET /api/v1/models, 2026-08-15) -- references are the same model
+            # taking one more input, not a premium tier.
+            "ref": {"model": "seedream-5.0-pro-i2i", "max_refs": 10,
+                    "verified": False},
             "inputs": [
                 {
                     "key": "aspect_ratio", "label": "Aspect ratio", "type": "enum",
@@ -131,6 +137,8 @@ DEFAULT_REGISTRY: dict[str, Any] = {
                  "options": ["png", "jpg"], "default": "png",
                  "help": "Renderful saves whatever bytes it delivers, whichever you ask for."},
             ],
+            # Reference-conditioned sibling (GET /api/v1/models, 2026-08-15).
+            "ref": {"model": "nano-banana-2-i2i", "max_refs": 10, "verified": False},
             "clip": {
                 "model": "google-veo-3.1",
                 "name": "Google Veo 3.1",
@@ -222,6 +230,8 @@ DEFAULT_REGISTRY: dict[str, Any] = {
                 {"key": "output_format", "label": "Requested format", "type": "enum",
                  "options": ["png", "jpg"], "default": "png"},
             ],
+            # Reference-conditioned sibling (GET /api/v1/models, 2026-08-15).
+            "ref": {"model": "gpt-image-2-i2i", "max_refs": 10, "verified": False},
             "clip": {
                 "model": "sora-2",
                 "name": "Sora 2",
@@ -304,6 +314,10 @@ DEFAULT_REGISTRY: dict[str, Any] = {
 
 SECTION_ENGINES = "engines"
 SECTION_VOICES = "voices"
+
+# Blocks that may be added to a shipped engine entry that predates them. Only
+# ever filled in when missing -- see _migrate().
+ADDITIVE_ENGINE_KEYS = ("ref",)
 
 # TTS is billed by the character, not the request: a 70-character line billed
 # 0.0035 live, which is exactly $0.05 per 1000 characters. Estimating per line
@@ -554,6 +568,18 @@ def _migrate(reg: dict) -> tuple[dict, bool]:
         if key not in reg.get(SECTION_ENGINES, {}):
             reg.setdefault(SECTION_ENGINES, {})[key] = json.loads(json.dumps(shipped))
             changed = True
+            continue
+        # A capability added to a shipped engine after the file was written is
+        # filled in, but only where the key is absent entirely. Rewriting the
+        # entry the way stale voices are rewritten would throw away a re-priced
+        # or renamed engine, and the promise made in the README is that editing
+        # one is safe. An absent key was never edited, so adding it cannot
+        # destroy anything.
+        for capability in ADDITIVE_ENGINE_KEYS:
+            if capability in shipped and capability not in reg[SECTION_ENGINES][key]:
+                reg[SECTION_ENGINES][key][capability] = json.loads(
+                    json.dumps(shipped[capability]))
+                changed = True
 
     sections = (
         (SECTION_VOICES, DEFAULT_VOICES, "default_voice", config.DEFAULT_VOICE),
@@ -731,6 +757,41 @@ def _validate_inputs(name: str, inputs: list, params: dict | None) -> dict:
             raise ParamError(f"{spec['label']}: unsupported control type {kind!r}")
 
     return out
+
+
+# --------------------------------------------------------------------------- #
+# The reference-conditioned sibling of an image engine
+#
+# Same house, same price band, one extra input. Used to hold a character's face
+# steady across a set, which a shared style block cannot do: prose fixes the
+# look, only the picture fixes the identity.
+# --------------------------------------------------------------------------- #
+
+def ref_spec(key: str) -> dict | None:
+    """The paired image-to-image model, or None for an engine without one."""
+    return engine(key).get("ref") or None
+
+
+def supports_references(key: str) -> bool:
+    return ref_spec(key) is not None
+
+
+def ref_model(key: str) -> str:
+    """The model id to send when a render carries reference images."""
+    spec = ref_spec(key)
+    if spec is None:
+        raise ParamError(f"{engine(key)['name']} does not accept reference images")
+    model = (spec.get("model") or "").strip()
+    if not model:
+        raise ParamError(f"{engine(key)['name']}: reference model id is missing")
+    return model
+
+
+def max_references(key: str) -> int:
+    """How many references this engine takes, capped by the app-wide limit."""
+    spec = ref_spec(key) or {}
+    declared = int(spec.get("max_refs") or config.MAX_REFERENCES_PER_SCENE)
+    return max(1, min(declared, config.MAX_REFERENCES_PER_SCENE))
 
 
 # --------------------------------------------------------------------------- #

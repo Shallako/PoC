@@ -198,6 +198,20 @@
       <textarea id="styleProfile" class="mono" rows="7"></textarea>
     </div>
 
+    <div class="panel" id="castPanel">
+      <h2 data-i18n="s2.cast.h">Cast</h2>
+      <p class="hint" data-i18n="s2.cast.hint">The style block holds the look; it cannot hold a face. Each
+        character here gets one reference portrait, rendered before the scenes and passed to every scene they
+        appear in, so they stay the same person throughout. Each portrait is one extra image on the bill.
+        Editing a description re-renders that portrait and every scene it appears in.</p>
+      <label class="check">
+        <input type="checkbox" id="consistency">
+        <span data-i18n="s2.cast.on">Keep characters consistent</span>
+        <button type="button" class="hlp" data-help="help.consistency" aria-label="?">?</button>
+      </label>
+      <div id="castList"></div>
+    </div>
+
     <div class="panel">
       <h2 data-i18n="s2.narr.h">Narration script</h2>
       <p class="hint" data-i18n="s2.narr.hint">Written in the story's language. Per-scene lines are saved to
@@ -469,8 +483,15 @@ const DYN = {
   "gallery.render": "Render this scene · ~{price}",
   "plan.reason.new": "not yet rendered",
   "plan.reason.changed": "prompt changed since last render",
+  "plan.reason.restaged": "a character's reference portrait changed",
   "plan.reason.forced": "re-render (forced)",
   "plan.reason.current": "already matches this prompt",
+  "plan.anchors": "Plus {count} character reference portrait(s) — {names} — rendered before the scenes and included in the estimate above.",
+  "plan.refs.unverified": "Reference images have not been proven on this account yet. Render one scene before a batch.",
+  "cast.none": "No recurring characters were found in this story, so there is nothing to keep consistent.",
+  "cast.unsupported": "This engine has no reference-image model, so it cannot hold a character's face steady between scenes.",
+  "cast.norender": "no portrait yet",
+  "cast.dirty": "description changed — will re-render",
   "plan.summary": "{count} to render, {skipped} already current. Estimated {estimate} at {price}/image.",
   "plan.nokey": "No Renderful API key found. Set RENDERFUL_API_KEY or put the key in api_key.txt, then restart.",
   "plan.unverified": "This engine is marked unverified in engines.json. Render one scene before committing to a batch.",
@@ -528,6 +549,7 @@ const DYN = {
   "help.promptLang": "Scene prompts and the shared style block come back in the language the story is written in, so you can read and edit them. Image engines are trained mostly on English text, so if a prompt in your language renders badly, switch this to English and segment again — titles, beats and the narration script stay in your language either way.",
   "help.renderScene": "Sends this one scene to {engine} straight away and spends about {price}. No other scene is touched. If the scene already has an image, the new one is saved as a new version (v02, v03…) and the old file stays on disk. You are asked to confirm before anything is spent.",
   "help.renderBatch": "Renders every scene in the list above: the ones with no image yet, plus any whose prompt changed since it was rendered. Scenes that already match their prompt are skipped, so this never pays twice for the same image. Preview cost shows the exact list first.",
+  "help.consistency": "A shared style block fixes the look of a set but cannot fix a face: \"a woman of thirty with dark hair\" is a different woman in every scene. With this on, each recurring character is rendered once as a reference portrait, and that picture is passed to every scene they appear in, so they stay the same person throughout. Each portrait is one extra image on the bill — a 12-scene story with two characters is 14 images, not 12. Editing a description re-renders that portrait and every scene the character appears in, because those scenes would otherwise keep a face the project no longer produces.",
   "help.forceAll": "Ignores what is already on disk and re-renders every scene, including ones that already match their prompt. Use it after changing the seed or an engine parameter — the prompt is unchanged then, so nothing would be re-rendered otherwise. It costs the full batch again.",
   "help.speakBatch": "Sends every narration line that has no audio yet, plus any you have edited since it was spoken, to the voice above. Lines whose audio already matches are skipped, so this never pays twice for the same line. Speech is billed per character, so the estimate follows the length of what you wrote — a whole story is usually a few cents. You are asked to confirm before anything is spent.",
   "help.speakScene": "Speaks this one line straight away and spends about {price}. No other line is touched. The file is written under the same name as this scene's image, and its real duration is measured from the audio that comes back and shown beside it.",
@@ -827,8 +849,47 @@ function statusLabel(s) {
   return { cls: key, text: t("status." + key) === "status." + key ? key : t("status." + key) };
 }
 
+function renderCast() {
+  const panel = $("castPanel"), box = $("castList"), toggle = $("consistency");
+  // An engine with no reference sibling cannot do this at all, so the control
+  // says so rather than offering a switch that would be refused on save.
+  toggle.checked = P.consistency === "cast";
+  toggle.disabled = !P.supports_references;
+  panel.classList.toggle("hidden", !P.scenes.length);
+  box.innerHTML = "";
+  if (!P.supports_references) {
+    box.innerHTML = `<div class="muted">${escapeHtml(t("cast.unsupported"))}</div>`;
+    return;
+  }
+  if (!(P.cast || []).length) {
+    box.innerHTML = `<div class="muted">${escapeHtml(t("cast.none"))}</div>`;
+    return;
+  }
+  P.cast.forEach((c) => {
+    const el = document.createElement("div");
+    el.className = "scene";
+    const shot = c.asset
+      ? `<img class="thumb" src="/api/projects/${P.id}/cast/${encodeURIComponent(c.asset)}" alt="">`
+      : `<div class="muted">${escapeHtml(t("cast.norender"))}</div>`;
+    el.innerHTML = `
+      <header>
+        <strong>${escapeHtml(c.name)}</strong>
+        ${c.dirty ? `<span class="badge warn">${escapeHtml(t("cast.dirty"))}</span>` : ""}
+        ${c.status === "failed" ? `<span class="badge bad">${escapeHtml(c.detail || "failed")}</span>` : ""}
+      </header>
+      <div class="row">
+        <div style="flex:3">
+          <textarea class="mono" rows="3" data-cast="${escapeHtml(c.slug)}">${escapeHtml(c.description || "")}</textarea>
+        </div>
+        <div style="flex:1">${shot}</div>
+      </div>`;
+    box.appendChild(el);
+  });
+}
+
 function renderScenes() {
   $("styleProfile").value = P.style_profile || "";
+  renderCast();
   const box = $("sceneList");
   box.innerHTML = "";
   if (!P.scenes.length) {
@@ -926,6 +987,12 @@ function collectScenePatch() {
   return Object.values(map);
 }
 
+function collectCastPatch() {
+  return Array.from(document.querySelectorAll("[data-cast]"), (el) => ({
+    slug: el.dataset.cast, description: el.value,
+  }));
+}
+
 // ------------------------------------------------------------------ gallery
 function renderGallery() {
   const g = $("gallery");
@@ -969,10 +1036,20 @@ async function refreshPlan() {
     if (!P.keys.renderful) html += `<div class="err">${escapeHtml(t("plan.nokey"))}</div>`;
     if (!plan.verified_engine) html += `<div class="warn">${escapeHtml(t("plan.unverified"))}</div>`;
     plan.warnings.forEach((w) => { html += `<div class="warn">${escapeHtml(w)}</div>`; });
+    if (plan.consistency_active && !plan.verified_references)
+      html += `<div class="warn">${escapeHtml(t("plan.refs.unverified"))}</div>`;
     html += `<div class="note">${escapeHtml(tf("plan.summary", {
       count: plan.count, skipped: plan.skip.length,
       estimate: money(plan.estimate), price: money(plan.price_per_image),
     }))} ${escapeHtml(plan.price_note || "")}</div>`;
+    // Anchors are billed images, so they are named here rather than turning up
+    // as an unexplained difference between the estimate and the invoice.
+    if (plan.anchor_count) {
+      html += `<div class="note">${escapeHtml(tf("plan.anchors", {
+        count: plan.anchor_count,
+        names: plan.anchors.map((a) => a.name).join(", "),
+      }))}</div>`;
+    }
     if (plan.render.length) {
       html += `<table><tr><th>${escapeHtml(t("plan.th.n"))}</th><th>${escapeHtml(t("plan.th.scene"))}</th>
         <th>${escapeHtml(t("plan.th.why"))}</th></tr>` +
@@ -1320,6 +1397,18 @@ $("promptLang").addEventListener("change", async (e) => {
   catch (err) { alertBox(err); }
 });
 
+$("consistency").addEventListener("change", async (e) => {
+  clearAlerts();
+  try {
+    P = await api(`/projects/${P.id}`, "PATCH",
+                  { consistency: e.target.checked ? "cast" : "off" });
+    renderAll();
+  } catch (err) {
+    e.target.checked = !e.target.checked;   // the server refused; show the truth
+    alertBox(err);
+  }
+});
+
 $("segmentBtn").onclick = async () => {
   clearAlerts();
   const btn = $("segmentBtn"); btn.disabled = true; $("segmentMsg").textContent = t("segmenting");
@@ -1347,6 +1436,7 @@ $("saveScenesBtn").onclick = async () => {
   try {
     P = await api(`/projects/${P.id}`, "PATCH", {
       style_profile: $("styleProfile").value, scenes: collectScenePatch(),
+      cast: collectCastPatch(),
     });
     renderAll();
     // An edited line is a line that has to be spoken again, and that changes

@@ -1,7 +1,19 @@
-# Character consistency -- what it would take
+# Character consistency
 
-**Short answer: about four days of work, roughly zero extra cost per image, and
-both modes can live in one product without forking it.**
+> **Built, and on by default.** This document was written as an estimate; the
+> feature now exists and the estimate is left in place below so the two can be
+> compared. What is *not* done is a live proving run -- no image-to-image request
+> has been sent to a real account, so treat the whole path as unproven against
+> the API even though it is fully exercised offline. See *Risks*.
+>
+> How it behaves: segmentation returns a **cast** of recurring characters and,
+> per scene, which of them appear. Each character is rendered once as a square
+> reference portrait, before any scene. Every scene is then submitted to the
+> engine's `-i2i` sibling with the portraits of the characters in that scene
+> attached. A scene with nobody in it is still a plain text-to-image request.
+
+**Original estimate: about four days of work, roughly zero extra cost per image,
+and both modes can live in one product without forking it.**
 
 The cost question turns out to be the easy one. The interesting cost is
 architectural, and it is smaller than expected because of one fact that had to be
@@ -165,12 +177,18 @@ The draft is not thrown away; it becomes the reference.
 
 ## Risks and the honest unknowns
 
-**Unproven: whether it actually holds a face across 12 scenes.** Multi-reference
+**Still unproven: whether it actually holds a face across 12 scenes.** This is
+now the only thing standing between the feature and a claim. Multi-reference
 conditioning is well documented and widely used, but "documented" is what the
-retired voice list was too. Nobody on this account has rendered a single
-image-to-image request. A **$0.50 test** -- one anchor, three scenes, same
-character, different actions -- settles it, and should happen before this appears
-in any pitch as a capability rather than a plan.
+retired voice list was too, and **nobody on this account has rendered a single
+image-to-image request**. Everything below the API boundary is exercised
+offline -- the payload, the model id, the ordering, the staleness, the failure
+paths -- and none of that proves Renderful accepts the request or that the
+result looks like the same person.
+
+A **$0.50 test** settles it: one story, two characters, three scenes. Until it
+has run, `"ref": {"verified": false}` stays as it is and the cost preview keeps
+warning before a batch.
 
 **URL longevity is evidenced, not guaranteed.** Two days proven, unsigned, no
 expiry parameter. If those URLs ever rotate, every project's anchor breaks at
@@ -192,6 +210,39 @@ same treatment prices and voice ids get, and for the same reason.
 **Anchoring on scene 1 couples two decisions.** Re-frame scene 1 and every other
 scene moves. A dedicated character sheet costs $0.045 and avoids it. Recommend
 the character sheet as the default and scene 1 as the free option.
+
+## What was actually built, against the estimate
+
+The estimate held. What it under-described was the failure handling, which is
+where most of the care went.
+
+| Estimated | Built |
+|---|---|
+| `renderful.py` i2i payload | `GEN_TYPE_IMAGE_REF`, `references=`, and a refusal to submit a reference render with an empty array -- that request is a text-to-image one wearing the billing model's id |
+| Registry `ref` block | On all three engines, plus an **additive-only** migration: a missing key is filled in, an existing entry is never rewritten, so a re-priced or renamed engine survives |
+| Anchor + staleness + barrier | As designed. Anchors render first, all of them, before any scene |
+| UI | Cast panel on step 2, per-character description and portrait, toggle, and the anchors named in the cost preview |
+| Tests | **26**, including the dependency and every failure path below |
+
+Three things the estimate did not anticipate:
+
+**A failed anchor must not take the story down.** A story rendered with one
+character unpinned is worth more than no story, so a failed portrait drops out of
+its scenes' references and those scenes record what they were *actually* rendered
+against. That matters because a scene that recorded the intended references would
+look settled forever and never re-stage once the portrait worked.
+
+**A failed *re*-render must not advertise the new version.** The version and the
+URL are two halves of one token. An early draft bumped the version when the
+anchor started rendering, so a failure left the character claiming v2 while still
+holding v1's picture -- every scene would then be conditioned on the old face
+while recording that it used the new one. Wrong, and permanently settled, which
+is the worst combination. The version is now written only on success, and
+`test_a_failed_re_render_never_advertises_the_new_version` fails without that.
+
+**Cast order, not scene order.** Two scenes with the same characters must produce
+the same fingerprint, or reordering a scene's cast list would re-render a picture
+that would come out identical.
 
 ## What this changes in the pitch
 
