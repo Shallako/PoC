@@ -277,8 +277,16 @@ block holds a consistent *look* across a set, but the app does not do reference-
 image conditioning, so **a recurring character's face is not guaranteed to stay
 the same from scene to scene**. For a lesson sequence or a story-shape test that
 does not matter. For a finished picture book it matters completely, and anyone
-buying this for that purpose will be disappointed. Character consistency is a
-known, solvable engineering problem and is not solved here today.
+buying this for that purpose will be disappointed.
+
+It is, however, a solved problem with a price on it. Every image engine here has
+a reference-conditioned sibling in the Renderful catalogue at an **identical
+price band**, and the reference is passed as a URL that Renderful already hosts
+and this app already records -- so no object storage, no uploads, no new
+infrastructure. Scoped at **four days and $0.045 a project** in
+[character-consistency.md](character-consistency.md), and it stays a second
+*mode* rather than a second pipeline. It is not built and not proven on a live
+account yet, so this document claims it as a plan, not a capability.
 
 ## 8. The unit economics, and the lesson from Sora
 
