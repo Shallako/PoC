@@ -33,6 +33,17 @@ RETRY_BACKOFF_SECONDS = 2               # multiplied by the attempt number
 # Renderful routes on `type`; everything else in the payload is model-specific.
 GEN_TYPE_IMAGE = "text-to-image"
 GEN_TYPE_AUDIO = "text-to-audio"
+# Same picture, plus reference images. A separate model id from the text-to-image
+# one -- `type` is one-to-one on this API, so seedream-5.0-pro and
+# seedream-5.0-pro-i2i are two entries, not one model in two modes.
+GEN_TYPE_IMAGE_REF = "image-to-image"
+
+# The schema (GET /api/v1/openapi.json?model=seedream-5.0-pro-i2i, read
+# 2026-08-15) types references as URIs, not base64: `image_url` is a string and
+# `images` an array of them. Nothing has to be uploaded, because every image
+# Renderful generates is already served from its own CDN and the manifest keeps
+# that URL -- so the reference for scene 7 is the URL the anchor came back on.
+REFERENCE_FIELD = "images"
 
 # Image defaults, applied only when the engine schema left one out.
 DEFAULT_ASPECT_RATIO = "16:9"
@@ -90,7 +101,7 @@ def api_call(url: str, key: str, payload: dict | None = None) -> dict:
 
 
 def submit(prompt: str, key: str, model: str, params: dict, *,
-           gen_type: str = GEN_TYPE_IMAGE) -> dict:
+           gen_type: str = GEN_TYPE_IMAGE, references: list[str] | None = None) -> dict:
     """Params must already have passed engines.validate().
 
     Image payloads keep the exact shape the Boston set was rendered with. Other
@@ -100,7 +111,7 @@ def submit(prompt: str, key: str, model: str, params: dict, *,
     """
     payload = {"type": gen_type, "model": model, "prompt": prompt}
 
-    if gen_type == GEN_TYPE_IMAGE:
+    if gen_type in (GEN_TYPE_IMAGE, GEN_TYPE_IMAGE_REF):
         payload.update({
             "aspect_ratio": params.get("aspect_ratio", DEFAULT_ASPECT_RATIO),
             "resolution": params.get("resolution", DEFAULT_RESOLUTION),
@@ -109,6 +120,12 @@ def submit(prompt: str, key: str, model: str, params: dict, *,
         })
         if params.get("seed") is not None:
             payload["seed"] = params["seed"]
+        # An image-to-image request with no reference is a text-to-image request
+        # wearing the wrong model id, and the model id is the half that bills.
+        if gen_type == GEN_TYPE_IMAGE_REF:
+            if not references:
+                raise ValueError("image-to-image needs at least one reference image")
+            payload[REFERENCE_FIELD] = list(references)
     else:
         payload.update({
             k: v for k, v in params.items()

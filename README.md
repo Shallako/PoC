@@ -3,12 +3,17 @@
 Story -> scenes -> engine-targeted prompts -> images -> narration script ->
 narration audio -> video -> export.
 
-Image creation defaults to **Seedream 5.0 Pro** through the Renderful API.
-Narration is spoken by **ElevenLabs Flash v2.5**, through the same API and the
-same key. The cut is assembled **on this machine** with ffmpeg -- nothing is
-uploaded and nothing is billed for it. Scope is **images, narration script,
-narration audio and a finished MP4** -- no generated video clips, no accounts,
-no billing layer.
+*What this is for and the market case for it, without the implementation:
+[docs/premise.md](docs/premise.md).*
+
+Image creation defaults to **Seedream 5.0 Pro** through the Renderful API, with
+**Nano Banana Pro** and **GPT Image 2** as alternatives -- those two also declare
+a video sibling (Veo 3.1, Sora 2), which is settings-only for now; see [Engines
+that also make video](#engines-that-also-make-video). Narration is spoken by
+**ElevenLabs Flash v2.5**, through the same API and the same key. The cut is
+assembled **on this machine** with ffmpeg -- nothing is uploaded and nothing is
+billed for it. Scope is **images, narration script, narration audio and a
+finished MP4** -- no generated video clips yet, no accounts, no billing layer.
 
 Claude writes one narration line per scene (PRD FR-1201/1203/1206) and you review
 and edit it before anything is spoken. Synthesis is a separate, confirmed step:
@@ -143,10 +148,14 @@ spend money.
    rejects for a bad parameter, so an out-of-schema value has to fail locally, for
    free.
 2. **Scenes & prompts** -- Claude returns ordered beats, one prompt body per beat,
-   and one shared style block, in the language of the story. Everything is editable;
-   the compiled prompt (what actually gets sent) is shown per scene. Narration is
-   written and edited here too.
-3. **Render** -- preview the batch and its cost, then confirm. Confirmation is
+   one shared style block, and the **cast** -- the recurring characters, and which
+   of them appear in each scene -- all in the language of the story. Everything is
+   editable; the compiled prompt (what actually gets sent) is shown per scene.
+   Narration is written and edited here too.
+3. **Render** -- preview the batch and its cost, then confirm. With character
+   consistency on (the default), each cast member's reference portrait renders
+   first and every scene is then conditioned on the portraits of the characters
+   in it -- see [Character consistency](#character-consistency). Confirmation is
    mandatory: `POST /api/projects/{id}/render` without `confirm: true` is a 400.
    Three workers, live per-scene status, per-scene re-render from the gallery (the
    `?` beside that button says what it spends), and `POST .../cancel` stops the run
@@ -172,8 +181,10 @@ spend money.
 
 ```
 projects/<project-id>/
-  project.json     story, language, style block, scenes, prompts, narration, params, spend
+  project.json     story, language, style block, cast, scenes, prompts, narration, params, spend
   manifest.json    one record per asset: engine, seed, params, exact prompt sent, cost
+  cast/            <project>_cast_<slug>_v<VV>.<jpg|png>  -- one reference portrait
+                   per recurring character; inputs to the story, not frames of it
   images/          <project>_<NNN>_<slug>_v<VV>[_seed<SEED>].<jpg|png>
   narration/       <project>_<NNN>_<slug>.txt   and  <project>_full-voiceover.txt
   audio/           <project>_<NNN>_<slug>.mp3   -- the spoken line, same stem
@@ -255,8 +266,58 @@ forces English back at any time, and if the call fails the page simply stays in
 English. Engine parameter labels come from `engines.json` and stay as written
 there.
 
+## Character consistency
+
+**On by default.** A shared style block fixes the *look* of a set but cannot fix
+an identity: "a woman of thirty with dark hair" is a different woman in every
+scene. Identity needs the picture itself.
+
+So segmentation also returns a **cast** -- characters who appear in more than one
+scene -- and, per scene, which of them are visible. Each character is rendered
+once as a square reference portrait (plain background, even light, one figure),
+and every scene is then submitted to the engine's reference-conditioned sibling
+with the portraits of the characters in that scene attached. A scene with none of
+them in it stays a plain text-to-image request, because image-to-image with an
+empty reference array is a text-to-image request wearing the billing model's id.
+
+Each portrait is **one extra billed image**: a 12-scene story with two characters
+is 14 images, not 12. The cost preview names them rather than letting them turn
+up as an unexplained difference on the invoice. The cast is capped at
+`MAX_CAST` (6), and a character no scene actually shows is dropped before
+anything is rendered.
+
+**Nothing is uploaded.** Renderful's schema takes references as URIs, and every
+image it generates is already served from its own CDN, so the reference for scene
+7 is the URL the portrait came back on -- recorded in `manifest.json` as
+`source_url`, exactly as it always has been. There is no object storage here and
+none is needed.
+
+**The dependency is the part that matters.** A scene's identity stops being its
+prompt alone and becomes `(prompt, the anchors it was rendered against)`. Edit a
+character's description and that portrait re-renders, every scene that character
+appears in is re-staged, and scenes they are *not* in are untouched. A scene
+records the anchors it actually used as `slug@version` tokens, so:
+
+- a portrait that failed is dropped from its scenes' references rather than
+  faked, and those scenes re-stage on the next run instead of looking settled;
+- a failed *re*-render never bumps the stored version, because the version and
+  the URL are two halves of one token -- advertising v2 while still holding v1's
+  picture would condition every scene on the old face while recording the new.
+
+Engines without a reference sibling (`custom`) cannot do this; the mode turns
+itself off and the API refuses to turn it back on rather than silently ignoring
+it. Turn it off deliberately with the checkbox on step 2.
+
+**Not yet proven on a live account.** Every part below the API boundary is
+exercised offline, but no image-to-image request has been sent to Renderful, so
+the shipped `ref` blocks are marked `"verified": false` and the cost preview
+warns before a batch. Render one scene before trusting a batch to it.
+[docs/character-consistency.md](docs/character-consistency.md) has the reasoning
+and the outstanding test.
+
 **Idempotent resume.** A scene is re-rendered when the freshly compiled prompt
-differs from the prompt stored against its asset, or its file has gone missing from
+differs from the prompt stored against its asset, when a character it references
+has been re-rendered, or when its file has gone missing from
 `images/` -- never on file timestamps. Edit
 a prompt and only that scene re-queues; re-run with nothing changed and nothing is
 spent. "Re-render everything" is an explicit checkbox.
@@ -336,14 +397,73 @@ to apply), and an `inputs` array that drives both the UI controls and validation
  "options": ["1K", "2K"], "default": "2K", "confirmed": ["1K", "2K"]}
 ```
 
-Control types: `enum`, `seed`, `range`, `toggle`, `text`. `confirmed` lists the
-values actually seen working on a live account -- anything outside it renders a
-warning in the cost bar before you spend. Set `"verified": false` on an engine you
-haven't proven yet and the UI will tell you to render one scene before a batch.
-The built-in `custom` engine lets you type any Renderful model id.
+Control types: `enum`, `integer`, `seed`, `range`, `toggle`, `text`. `confirmed`
+lists the values actually seen working on a live account -- anything outside it
+renders a warning in the cost bar before you spend. Set `"verified": false` on an
+engine you haven't proven yet and the UI will tell you to render one scene before
+a batch. The built-in `custom` engine lets you type any Renderful model id.
+
+An engine that keeps characters consistent also declares its reference sibling:
+
+```json
+"ref": {"model": "seedream-5.0-pro-i2i", "max_refs": 10, "verified": false}
+```
+
+Same house, same price band, one more input -- the pairs were read from
+`GET /api/v1/models` on 2026-08-15 and are identical, floor and ceiling, to their
+text-to-image counterparts. An engine with no `ref` block simply cannot hold a
+face steady, and the UI says so instead of offering a switch that would be
+refused on save.
+
+A shipped engine that is missing from your `engines.json` is added on next load;
+entries already in the file are never touched, so renaming or re-pricing one is
+safe and survives an upgrade. The one exception is *additive*: a capability block
+a shipped engine gained after your file was written (`ref` is the first) is
+filled in when the key is absent entirely. An absent key was never edited, so
+adding it cannot overwrite a decision you made -- unlike the voice repair, which
+rewrites whole entries and is deliberately limited to entries this app ships.
 
 Only `seedream-5.0-pro` is confirmed against a live account (it rendered the Boston
 set). Everything else is unverified until you prove it.
+
+## Engines that also make video
+
+Three of the four engines are image-only. Two are paired with a video model from
+the same house, declared under `clip` on the image entry:
+
+| Engine | Image | Video sibling | Clip |
+|---|---|---|---|
+| Nano Banana Pro (Google) | $0.135 / 1k, up to 4K | `google-veo-3.1` | $2.82 at 720p, $5.64 at 1080p, 4-8s |
+| GPT Image 2 (OpenAI) | $0.03 / 1K, up to 4K | `sora-2` | $0.44-$0.88, 720p, 4-20s |
+
+Renderful has **no dual-mode model**: `type` is one-to-one, so `nano-banana-pro`
+is text-to-image and `google-veo-3.1` is text-to-video, and "an engine that also
+makes video" is a pair of ids stored on one entry. Both models generate their own
+speech and sound, which is what the audio inputs on the `clip` block are -- a clip
+does not need the narration audio from step 4.
+
+Every id, aspect ratio, resolution, duration and price band came from
+`GET /api/v1/models` on this account, not from memory. Run it yourself to refresh
+them; 584 models come back with their capabilities and their price bands.
+
+**Read the money twice.** A clip is 20-40x an image. Twelve scenes is about $1 in
+images and **$10-$68 in clips** depending on the pairing. Image estimates read the
+published band's floor at the lowest resolution and double per step, which is how
+Seedream's real 1K/2K prices behave; clip estimates take the **ceiling**, because
+guessing low on a clip would understate a batch by more than the entire image
+budget. Neither end is confirmed against a live charge yet.
+
+**What is and is not built.** The image half works end to end today -- pick either
+engine and render. The video half is *declared*: the model id, frame, length and
+audio options are real, they are validated by the same schema machinery as
+everything else, and they are saved on the project as `clip_params`. Nothing
+sends them yet, so choosing one of these engines costs exactly what its images
+cost. Wiring the clips would need a Renderful `text-to-video` submission, a job
+kind in the orchestrator, a confirmation gate priced per clip, and a decision
+about whether generated clips replace the ffmpeg stills in step 5 or sit beside
+them. The audio parameter names in particular are read off how the models behave,
+not off a published schema -- the catalog exposes only aspect ratio, resolution
+and duration -- so prove one clip before trusting a batch to them.
 
 ## Adding a voice
 
@@ -401,7 +521,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 140 offline tests, free
+    .venv\Scripts\python -m pytest             # 174 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 The offline suite drives the real FastAPI app against a fake Renderful HTTP

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from conftest import STORY, new_project, project, segmented
 from fake_claude import APIError, Reply, default_segment, overloaded
-from shoulico import compiler, config, i18n, narration, store
+from shoulico import compiler, config, engines, i18n, narration, store
 
 
 # --------------------------------------------------------------------- #
@@ -113,6 +113,86 @@ def test_switching_engine_resets_params_to_that_engine(client):
     assert "model_id" in p["params"]
     assert client.patch(f"/api/projects/{pid}",
                         json={"engine": "nope"}).status_code == 400
+
+
+# --------------------------------------------------------------------- #
+# Engines that also generate video
+# --------------------------------------------------------------------- #
+
+CLIP_ENGINES = [("nano-banana-pro", "google-veo-3.1"), ("gpt-image-2", "sora-2")]
+
+
+@pytest.mark.parametrize("key, clip_model", CLIP_ENGINES)
+def test_a_video_engine_declares_its_sibling_and_both_halves_of_the_price(client, key,
+                                                                         clip_model):
+    entry = client.get("/api/engines").json()["engines"][key]
+    assert entry["clip"]["model"] == clip_model
+    assert not entry["verified"], "nothing here has been proven against a live account"
+    # The clip price has to dwarf the image price, or the confirm dialog lies.
+    assert entry["clip"]["price_per_clip"] > entry["price_per_image"] * 5
+    assert {i["key"] for i in entry["clip"]["inputs"]} >= {
+        "aspect_ratio", "resolution", "duration", "audio", "spoken_language"}
+
+
+def test_an_image_only_engine_has_no_clip_and_refuses_clip_settings(client):
+    entry = client.get("/api/engines").json()["engines"]["seedream-5.0-pro"]
+    assert entry["clip"] is None
+    pid = new_project(client)
+    assert project(client, pid)["clip_params"] == {}
+    r = client.patch(f"/api/projects/{pid}", json={"clip_params": {"duration": "8"}})
+    assert r.status_code == 400 and "does not generate video" in r.json()["detail"]
+
+
+def test_clip_settings_are_validated_the_same_way_image_parameters_are(client):
+    pid = new_project(client)
+    p = client.patch(f"/api/projects/{pid}", json={"engine": "gpt-image-2"}).json()
+    assert p["clip_params"]["duration"] == "8" and p["clip_params"]["audio"] is True
+
+    p = client.patch(f"/api/projects/{pid}",
+                     json={"clip_params": {"duration": "20", "audio": False}}).json()
+    assert p["clip_params"]["duration"] == "20" and p["clip_params"]["audio"] is False
+
+    r = client.patch(f"/api/projects/{pid}", json={"clip_params": {"duration": "7"}})
+    assert r.status_code == 400 and "not one of" in r.json()["detail"]
+    r = client.patch(f"/api/projects/{pid}", json={"clip_params": {"fps": 30}})
+    assert r.status_code == 400 and "unknown parameter" in r.json()["detail"]
+
+
+def test_switching_engine_replaces_the_clip_settings_rather_than_carrying_them(client):
+    """Sora offers 20-second clips; Veo stops at 8. A carried-over 20 would be invalid."""
+    pid = new_project(client)
+    client.patch(f"/api/projects/{pid}", json={"engine": "gpt-image-2"})
+    client.patch(f"/api/projects/{pid}", json={"clip_params": {"duration": "20"}})
+    p = client.patch(f"/api/projects/{pid}", json={"engine": "nano-banana-pro"}).json()
+    assert p["clip_params"]["duration"] == "8"
+    assert p["clip_params"]["resolution"] == "720p"
+
+
+def test_the_clip_estimate_follows_resolution_and_never_reads_low(client):
+    pid = new_project(client)
+    client.patch(f"/api/projects/{pid}", json={"engine": "nano-banana-pro"})
+    cheap = client.patch(f"/api/projects/{pid}",
+                         json={"clip_params": {"resolution": "720p"}}).json()
+    dear = client.patch(f"/api/projects/{pid}",
+                        json={"clip_params": {"resolution": "1080p"}}).json()
+    assert cheap["price_per_clip"] == 2.82 and dear["price_per_clip"] == 5.64
+    # Anything off the table falls back to the ceiling, not the floor.
+    assert engines.price_per_clip("nano-banana-pro", {"resolution": "4k"}) == 5.64
+    assert engines.price_per_clip("seedream-5.0-pro") == 0.0
+
+
+def test_a_hand_written_engines_json_gains_new_engines_without_losing_edits(client):
+    """The file exists, so defaults are never consulted again -- unless we add them."""
+    import json
+    client.get("/api/engines")                    # materialises the file on disk
+    reg = json.loads(config.ENGINES_FILE.read_text(encoding="utf-8"))
+    reg["engines"].pop("gpt-image-2")
+    reg["engines"]["seedream-5.0-pro"]["name"] = "My Renamed Seedream"
+    config.ENGINES_FILE.write_text(json.dumps(reg), encoding="utf-8")
+
+    fresh = engines.registry(reload=True)["engines"]
+    assert "gpt-image-2" in fresh, "a newly shipped engine never reached an existing file"
+    assert fresh["seedream-5.0-pro"]["name"] == "My Renamed Seedream", "clobbered a user edit"
 
 
 def test_custom_engine_without_a_model_id_cannot_be_planned(client, claude):

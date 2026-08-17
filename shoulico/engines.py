@@ -54,6 +54,12 @@ DEFAULT_REGISTRY: dict[str, Any] = {
                     "so the scene body is sent first and the shared style block after it.",
                 ],
             },
+            # Reference-conditioned sibling, for character consistency. Same
+            # price band as the text-to-image entry above, pair for pair
+            # (GET /api/v1/models, 2026-08-15) -- references are the same model
+            # taking one more input, not a premium tier.
+            "ref": {"model": "seedream-5.0-pro-i2i", "max_refs": 10,
+                    "verified": False},
             "inputs": [
                 {
                     "key": "aspect_ratio", "label": "Aspect ratio", "type": "enum",
@@ -74,6 +80,203 @@ DEFAULT_REGISTRY: dict[str, Any] = {
                     "help": "Renderful delivers JPEG regardless; the file is saved as delivered.",
                 },
             ],
+        },
+        # --------------------------------------------------------------- #
+        # Engines that also generate video.
+        #
+        # Renderful has no dual-mode model: `type` is one-to-one, so
+        # nano-banana-pro is text-to-image and google-veo-3.1 is text-to-video,
+        # and an engine that does both is a pair of ids from the same house.
+        # The sibling lives under "clip" on the image entry, with its own
+        # schema, so choosing the engine chooses both halves.
+        #
+        # Every id, aspect ratio, resolution, duration and price band below was
+        # read from GET /api/v1/models on this account on 2026-08-13. None of it
+        # is remembered, because the last time model ids were written from
+        # memory every one of them was wrong (see VOICE_LIBRARY).
+        # --------------------------------------------------------------- #
+        "nano-banana-pro": {
+            "name": "Nano Banana Pro",
+            "provider": "Google (via Renderful)",
+            "strength": "Strongest prompt-following · up to 4K · clips via Veo 3.1",
+            "badges": ["T2I", "T2V", "4K"],
+            "verified": False,
+            "price_per_image": 0.135,
+            "price_table": {"resolution": {"1k": 0.135, "2k": 0.27, "4k": 0.54}},
+            "price_note": "Unverified on this account. The catalog publishes a $0.135-$0.54 "
+                          "band; the table reads the floor as the 1k price and doubles per "
+                          "step, which is how Seedream's 1K/2K prices behave. Only the floor "
+                          "is a published figure -- the two above it are interpolated. The "
+                          "real charge comes back on the response and lands in manifest.json.",
+            "dialect": {
+                "supports_negative_prompt": False,
+                "strip_quoted_dialogue": True,
+                "notes": [
+                    "Unverified engine: render one scene first, then the batch.",
+                    "Resolutions are lower-case here (1k/2k/4k), unlike Seedream's 1K/2K. "
+                    "The strings are sent as written, so the case matters.",
+                    "No negative-prompt parameter: exclusions have to be phrased positively, in words.",
+                    "Quoted dialogue tends to be rendered as on-image text.",
+                    "Seed and requested format are sent on every request because the payload "
+                    "is shared with Seedream; neither is published for this model.",
+                ],
+            },
+            "inputs": [
+                {
+                    "key": "aspect_ratio", "label": "Aspect ratio", "type": "enum",
+                    "options": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"],
+                    "default": "16:9",
+                },
+                {
+                    "key": "resolution", "label": "Resolution", "type": "enum",
+                    "options": ["1k", "2k", "4k"], "default": "2k",
+                },
+                {"key": "seed", "label": "Seed (blank = random)", "type": "seed",
+                 "default": None, "min": 0, "max": 2147483647},
+                {"key": "output_format", "label": "Requested format", "type": "enum",
+                 "options": ["png", "jpg"], "default": "png",
+                 "help": "Renderful saves whatever bytes it delivers, whichever you ask for."},
+            ],
+            # Reference-conditioned sibling (GET /api/v1/models, 2026-08-15).
+            "ref": {"model": "nano-banana-2-i2i", "max_refs": 10, "verified": False},
+            "clip": {
+                "model": "google-veo-3.1",
+                "name": "Google Veo 3.1",
+                "provider": "Google (via Renderful)",
+                "price_per_clip": 5.64,
+                "price_table": {"resolution": {"720p": 2.82, "1080p": 5.64}},
+                "price_note": "Unverified. The catalog publishes $2.82-$5.64 per clip against "
+                              "exactly two resolutions, so the band is read as one price each "
+                              "-- less of a guess than the image tables. Anything off the "
+                              "table falls back to the ceiling: one clip is 20-40x one image, "
+                              "so an estimate that is too low would be a far worse mistake "
+                              "than one that is too high.",
+                "notes": [
+                    "Speaks for itself: Veo 3.1 generates its own dialogue and sound, so a "
+                    "clip needs no separate narration audio.",
+                    "The audio controls below are declared from the model's behaviour, not "
+                    "from a published schema -- the catalog lists only aspect ratio, "
+                    "resolution and duration. Generate one clip before a batch.",
+                    "Longest clip is 8 seconds. A scene whose narration runs longer than "
+                    "its clip has to be split or held on a still.",
+                ],
+                "inputs": [
+                    {
+                        "key": "aspect_ratio", "label": "Aspect ratio", "type": "enum",
+                        "options": ["16:9", "9:16"], "default": "16:9",
+                    },
+                    {
+                        "key": "resolution", "label": "Resolution", "type": "enum",
+                        "options": ["720p", "1080p"], "default": "720p",
+                    },
+                    {
+                        "key": "duration", "label": "Clip length", "type": "enum",
+                        "options": ["4", "6", "8"],
+                        "labels": {"4": "4 seconds", "6": "6 seconds", "8": "8 seconds"},
+                        "default": "8",
+                    },
+                    {
+                        "key": "audio", "label": "Generate speech and sound", "type": "toggle",
+                        "default": True,
+                        "help": "Unconfirmed parameter name -- prove one clip before a batch.",
+                    },
+                    {
+                        "key": "spoken_language",
+                        "label": "Spoken language (blank = follow the story)",
+                        "type": "text", "default": "", "required": False,
+                    },
+                ],
+            },
+        },
+        "gpt-image-2": {
+            "name": "GPT Image 2",
+            "provider": "OpenAI (via Renderful)",
+            "strength": "Cheapest of the three · reliable lettering · clips via Sora 2",
+            "badges": ["T2I", "T2V", "4K"],
+            "verified": False,
+            "price_per_image": 0.03,
+            "price_table": {"resolution": {"1K": 0.03, "2K": 0.06, "4K": 0.12}},
+            "price_note": "Unverified on this account. The catalog publishes a $0.03-$0.12 "
+                          "band, which undercuts Seedream at every resolution. Only the floor "
+                          "is published; 2K and 4K are interpolated the same way as Nano "
+                          "Banana Pro. The real charge comes back on the response.",
+            "dialect": {
+                "supports_negative_prompt": False,
+                "strip_quoted_dialogue": True,
+                "notes": [
+                    "Unverified engine: render one scene first, then the batch.",
+                    "Resolutions are upper-case here (1K/2K/4K) and 'auto' is a valid aspect "
+                    "ratio, which lets the model choose the frame -- fine for one image, bad "
+                    "for a set that has to cut together.",
+                    "Renders legible text better than the others, which makes stray quoted "
+                    "dialogue *more* likely to appear in the picture, not less. The guardrail "
+                    "still strips it.",
+                    "No negative-prompt parameter: exclusions have to be phrased positively, in words.",
+                ],
+            },
+            "inputs": [
+                {
+                    "key": "aspect_ratio", "label": "Aspect ratio", "type": "enum",
+                    "options": ["auto", "1:1", "9:16", "16:9", "4:3", "3:4"],
+                    "default": "16:9",
+                    "help": "'auto' lets the model pick per image, so a set can come back mixed.",
+                },
+                {
+                    "key": "resolution", "label": "Resolution", "type": "enum",
+                    "options": ["1K", "2K", "4K"], "default": "2K",
+                },
+                {"key": "seed", "label": "Seed (blank = random)", "type": "seed",
+                 "default": None, "min": 0, "max": 2147483647},
+                {"key": "output_format", "label": "Requested format", "type": "enum",
+                 "options": ["png", "jpg"], "default": "png"},
+            ],
+            # Reference-conditioned sibling (GET /api/v1/models, 2026-08-15).
+            "ref": {"model": "gpt-image-2-i2i", "max_refs": 10, "verified": False},
+            "clip": {
+                "model": "sora-2",
+                "name": "Sora 2",
+                "provider": "OpenAI (via Renderful)",
+                "price_per_clip": 0.88,
+                "price_note": "Unverified. The catalog publishes $0.44-$0.88 per clip -- the "
+                              "cheapest video in the catalog by a wide margin, and about a "
+                              "sixth of Veo 3.1. The estimate takes the ceiling.",
+                "notes": [
+                    "Speaks for itself: Sora 2 generates its own dialogue and sound, so a "
+                    "clip needs no separate narration audio.",
+                    "The audio controls below are declared from the model's behaviour, not "
+                    "from a published schema -- the catalog lists only aspect ratio, "
+                    "resolution and duration. Generate one clip before a batch.",
+                    "Clips run to 20 seconds, long enough for most single narration lines, "
+                    "and only 720p is offered.",
+                ],
+                "inputs": [
+                    {
+                        "key": "aspect_ratio", "label": "Aspect ratio", "type": "enum",
+                        "options": ["16:9", "9:16"], "default": "16:9",
+                    },
+                    {
+                        "key": "resolution", "label": "Resolution", "type": "enum",
+                        "options": ["720p"], "default": "720p",
+                    },
+                    {
+                        "key": "duration", "label": "Clip length", "type": "enum",
+                        "options": ["4", "8", "12", "16", "20"],
+                        "labels": {"4": "4 seconds", "8": "8 seconds", "12": "12 seconds",
+                                   "16": "16 seconds", "20": "20 seconds"},
+                        "default": "8",
+                    },
+                    {
+                        "key": "audio", "label": "Generate speech and sound", "type": "toggle",
+                        "default": True,
+                        "help": "Unconfirmed parameter name -- prove one clip before a batch.",
+                    },
+                    {
+                        "key": "spoken_language",
+                        "label": "Spoken language (blank = follow the story)",
+                        "type": "text", "default": "", "required": False,
+                    },
+                ],
+            },
         },
         "custom": {
             "name": "Custom Renderful model",
@@ -111,6 +314,10 @@ DEFAULT_REGISTRY: dict[str, Any] = {
 
 SECTION_ENGINES = "engines"
 SECTION_VOICES = "voices"
+
+# Blocks that may be added to a shipped engine entry that predates them. Only
+# ever filled in when missing -- see _migrate().
+ADDITIVE_ENGINE_KEYS = ("ref",)
 
 # TTS is billed by the character, not the request: a 70-character line billed
 # 0.0035 live, which is exactly $0.05 per 1000 characters. Estimating per line
@@ -352,6 +559,28 @@ def _migrate(reg: dict) -> tuple[dict, bool]:
     image engine exactly as it was.
     """
     changed = False
+
+    # An engines.json written before an engine shipped would never see it: the
+    # file exists, so the defaults are not consulted again. Missing entries are
+    # added; existing ones are left exactly as the user has them, including
+    # seedream's, so this can only ever grow the list.
+    for key, shipped in DEFAULT_REGISTRY[SECTION_ENGINES].items():
+        if key not in reg.get(SECTION_ENGINES, {}):
+            reg.setdefault(SECTION_ENGINES, {})[key] = json.loads(json.dumps(shipped))
+            changed = True
+            continue
+        # A capability added to a shipped engine after the file was written is
+        # filled in, but only where the key is absent entirely. Rewriting the
+        # entry the way stale voices are rewritten would throw away a re-priced
+        # or renamed engine, and the promise made in the README is that editing
+        # one is safe. An absent key was never edited, so adding it cannot
+        # destroy anything.
+        for capability in ADDITIVE_ENGINE_KEYS:
+            if capability in shipped and capability not in reg[SECTION_ENGINES][key]:
+                reg[SECTION_ENGINES][key][capability] = json.loads(
+                    json.dumps(shipped[capability]))
+                changed = True
+
     sections = (
         (SECTION_VOICES, DEFAULT_VOICES, "default_voice", config.DEFAULT_VOICE),
         (SECTION_VIDEO, DEFAULT_VIDEO_PROFILES, "default_video",
@@ -441,12 +670,21 @@ def validate(key: str, params: dict | None, section: str = SECTION_ENGINES) -> d
     Runs before every submission -- a rejected request still costs money.
     """
     eng = _entry(section, key)
-    schema = {i["key"]: i for i in eng["inputs"]}
+    return _validate_inputs(eng["name"], eng["inputs"], params)
+
+
+def _validate_inputs(name: str, inputs: list, params: dict | None) -> dict:
+    """The schema walk itself, against any declared `inputs` list.
+
+    Split out from validate() so an engine's video sibling is checked by exactly
+    the same rules as the engine: one implementation, one set of error messages.
+    """
+    schema = {i["key"]: i for i in inputs}
     params = dict(params or {})
 
     unknown = sorted(set(params) - set(schema))
     if unknown:
-        raise ParamError(f"{eng['name']}: unknown parameter(s) {', '.join(unknown)}")
+        raise ParamError(f"{name}: unknown parameter(s) {', '.join(unknown)}")
 
     out: dict[str, Any] = {}
     for k, spec in schema.items():
@@ -519,6 +757,84 @@ def validate(key: str, params: dict | None, section: str = SECTION_ENGINES) -> d
             raise ParamError(f"{spec['label']}: unsupported control type {kind!r}")
 
     return out
+
+
+# --------------------------------------------------------------------------- #
+# The reference-conditioned sibling of an image engine
+#
+# Same house, same price band, one extra input. Used to hold a character's face
+# steady across a set, which a shared style block cannot do: prose fixes the
+# look, only the picture fixes the identity.
+# --------------------------------------------------------------------------- #
+
+def ref_spec(key: str) -> dict | None:
+    """The paired image-to-image model, or None for an engine without one."""
+    return engine(key).get("ref") or None
+
+
+def supports_references(key: str) -> bool:
+    return ref_spec(key) is not None
+
+
+def ref_model(key: str) -> str:
+    """The model id to send when a render carries reference images."""
+    spec = ref_spec(key)
+    if spec is None:
+        raise ParamError(f"{engine(key)['name']} does not accept reference images")
+    model = (spec.get("model") or "").strip()
+    if not model:
+        raise ParamError(f"{engine(key)['name']}: reference model id is missing")
+    return model
+
+
+def max_references(key: str) -> int:
+    """How many references this engine takes, capped by the app-wide limit."""
+    spec = ref_spec(key) or {}
+    declared = int(spec.get("max_refs") or config.MAX_REFERENCES_PER_SCENE)
+    return max(1, min(declared, config.MAX_REFERENCES_PER_SCENE))
+
+
+# --------------------------------------------------------------------------- #
+# The video sibling of an image engine
+# --------------------------------------------------------------------------- #
+
+def clip_spec(key: str) -> dict | None:
+    """The paired text-to-video model, or None for an image-only engine."""
+    return engine(key).get("clip") or None
+
+
+def makes_video(key: str) -> bool:
+    return clip_spec(key) is not None
+
+
+def clip_defaults(key: str) -> dict:
+    spec = clip_spec(key)
+    return {i["key"]: i.get("default") for i in spec["inputs"]} if spec else {}
+
+
+def validate_clip(key: str, params: dict | None) -> dict:
+    spec = clip_spec(key)
+    if spec is None:
+        raise ParamError(f"{engine(key)['name']} does not generate video")
+    return _validate_inputs(spec["name"], spec["inputs"], params)
+
+
+def price_per_clip(key: str, params: dict | None = None) -> float:
+    """What one generated clip is estimated to cost.
+
+    Unlike price_per_image this takes the published ceiling rather than the
+    floor: a clip runs 20-40x an image, so guessing low here would understate a
+    batch by more than the whole image budget.
+    """
+    spec = clip_spec(key)
+    if spec is None:
+        return 0.0
+    base = float(spec.get("price_per_clip") or 0.0)
+    for param, prices in (spec.get("price_table") or {}).items():
+        value = (params or {}).get(param)
+        if value in prices:
+            return float(prices[value])
+    return base
 
 
 def model_id(key: str, params: dict) -> str:
@@ -648,7 +964,22 @@ def public_registry() -> dict:
                 "price_note": v.get("price_note", ""),
                 "dialect_notes": v.get("dialect", {}).get("notes", []),
                 "inputs": v.get("inputs", []),
+                "clip": _public_clip(v.get("clip")),
             }
             for k, v in reg["engines"].items()
         },
+    }
+
+
+def _public_clip(spec: dict | None) -> dict | None:
+    if not spec:
+        return None
+    return {
+        "model": spec.get("model", ""),
+        "name": spec.get("name", spec.get("model", "")),
+        "provider": spec.get("provider", ""),
+        "price_per_clip": spec.get("price_per_clip", 0.0),
+        "price_note": spec.get("price_note", ""),
+        "notes": spec.get("notes", []),
+        "inputs": spec.get("inputs", []),
     }

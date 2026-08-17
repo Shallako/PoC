@@ -163,8 +163,17 @@ def new_project(client, name="Test Story", story=STORY, **body) -> str:
     return r.json()["id"]
 
 
-def segmented(client, scenes=3, **body) -> str:
+def segmented(client, scenes=3, consistency="off", **body) -> str:
+    """A segmented project, with character consistency OFF unless asked for.
+
+    The app ships with it on, but a test about how one scene retries a 5xx
+    should not also be paying for two character portraits and asserting around
+    them. Tests that are about consistency pass consistency="cast" and get the
+    shipped default; everything else stays a test of the thing it names.
+    """
     pid = new_project(client)
+    r = client.patch(f"/api/projects/{pid}", json={"consistency": consistency})
+    assert r.status_code == 200, r.text
     r = client.post(f"/api/projects/{pid}/segment", json={"scene_count": scenes, **body})
     assert r.status_code == 200, r.text
     return pid

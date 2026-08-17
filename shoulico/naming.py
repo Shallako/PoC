@@ -48,6 +48,13 @@ def flat_stem(project: str, n: int, slug: str) -> str:
     return f"{project}_{n:03d}_{slug}"
 
 
+# Character anchors sort together and ahead of nothing: they are not scenes, so
+# they deliberately do not take an _NNN_ ordinal that would interleave them with
+# the story in a directory listing.
+def anchor_stem(project: str, slug: str, version: int = 1) -> str:
+    return f"{project}_cast_{slug}_v{version:02d}"
+
+
 def full_voiceover_stem(project: str) -> str:
     return f"{project}_full-voiceover"
 

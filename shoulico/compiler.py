@@ -48,6 +48,20 @@ def compile_prompt(body: str, style_block: str, dialect: dict | None = None) -> 
     return f"{text} {style}".strip() if style else text
 
 
+def compile_anchor_prompt(description: str, style_block: str,
+                          dialect: dict | None = None) -> str:
+    """The prompt for a character's reference portrait.
+
+    Same shape as a scene -- subject first, shared style last -- so the anchor is
+    rendered in the same art style as the set it will be referenced by. The
+    framing instructions sit between them: an anchor is a reference sheet, and a
+    reference with a busy background teaches the model the background as firmly
+    as it teaches the face.
+    """
+    body = f"{(description or '').strip()} {config.ANCHOR_STYLE_SUFFIX}".strip()
+    return compile_prompt(body, style_block, dialect)
+
+
 # --------------------------------------------------------------------------- #
 # Claude
 # --------------------------------------------------------------------------- #
@@ -77,6 +91,31 @@ SEGMENT_SCHEMA = {
             "type": "string",
             "description": "One shared style/consistency block appended to every prompt.",
         },
+        "cast": {
+            "type": "array",
+            "description": "Characters who appear in more than one scene, most "
+                           "important first. Empty for a story with no recurring "
+                           "figures (a landscape sequence, an abstract piece).",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "How the story refers to them, e.g. 'Marta' "
+                                       "or 'the lighthouse keeper'.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "A standalone image prompt for a reference "
+                                       "portrait of this character alone: age, build, "
+                                       "face, hair, clothing, distinguishing features. "
+                                       "No setting, no action, no other characters.",
+                    },
+                },
+                "required": ["name", "description"],
+                "additionalProperties": False,
+            },
+        },
         "scenes": {
             "type": "array",
             "items": {
@@ -86,13 +125,19 @@ SEGMENT_SCHEMA = {
                     "title": {"type": "string"},
                     "beat": {"type": "string"},
                     "prompt": {"type": "string"},
+                    "cast": {
+                        "type": "array",
+                        "description": "Names from `cast` who are visible in this "
+                                       "scene. Empty if none of them are.",
+                        "items": {"type": "string"},
+                    },
                 },
-                "required": ["ordinal", "title", "beat", "prompt"],
+                "required": ["ordinal", "title", "beat", "prompt", "cast"],
                 "additionalProperties": False,
             },
         },
     },
-    "required": ["language", "style_profile", "scenes"],
+    "required": ["language", "style_profile", "cast", "scenes"],
     "additionalProperties": False,
 }
 
@@ -127,6 +172,22 @@ across the whole set: art style and rendering, period and setting, recurring cha
 descriptions (build, age, hair, clothing, distinguishing features), casting, wardrobe \
 and prop rules, and any hard "no text in the image" instruction. Write it as flowing \
 prose the engine can read, not as a bullet list.
+
+The cast is the recurring characters. Each one gets a reference portrait rendered before \
+the scenes, and that picture is then fed to every scene they appear in, so their face \
+stays the same across the set. Two rules follow from that:
+- A `description` must stand completely alone. It is sent as its own prompt with no \
+scene around it, so write the person: age, build, face, hair, colouring, clothing, \
+distinguishing features. Do not write where they are, what they are doing, who they are \
+with, or how the shot is framed.
+- Only list characters who appear in more than one scene. A figure seen once needs no \
+anchor -- there is nothing for them to stay consistent with, and each anchor is a \
+separate billed image.
+Then, for every scene, list in `cast` exactly which of those characters are visible in \
+it. Getting this wrong is expensive in both directions: a name you leave out loses that \
+character's face in that scene, and a name you add that is not really on screen pushes \
+the engine to put them there.
+The same adult-age rule applies to a cast description as to a scene prompt.
 
 Language:
 - Work out which language the story is written in and report it in `language`.
@@ -409,6 +470,9 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
     meta: dict = {}
     data = _structured_call(SEGMENT_SYSTEM, user, SEGMENT_SCHEMA, api_key, model, meta=meta)
 
+    cast = normalize_cast(data.get("cast"))
+    known = {c["name"] for c in cast}
+
     scenes = []
     for i, raw in enumerate(data.get("scenes", []), start=1):
         title = (raw.get("title") or f"scene {i}").strip()
@@ -418,6 +482,10 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
             "slug": slugify(title),
             "beat": (raw.get("beat") or "").strip(),
             "body": (raw.get("prompt") or "").strip(),
+            # Dropped rather than trusted: a name that is not in the cast has no
+            # anchor to reference, and carrying it would mean every consumer of
+            # this field has to re-check it against the cast.
+            "cast": [n for n in _clean_names(raw.get("cast")) if n in known],
         })
     scenes.sort(key=lambda s: s["n"])
     # Renumber so the ordinals are always dense and 1-based, whatever came back.
@@ -426,6 +494,11 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
     if not scenes:
         raise RuntimeError("Claude returned no scenes.")
 
+    # A character nobody actually appears with is an anchor that would be
+    # rendered, billed, and never referenced.
+    used = {name for s in scenes for name in s["cast"]}
+    cast = [c for c in cast if c["name"] in used]
+
     return {
         "language": normalize_language(data.get("language")),
         # Which model actually wrote these scenes -- not always the one we asked
@@ -433,5 +506,44 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
         "model": meta.get("model") or model,
         "fell_back": bool(meta.get("fell_back")),
         "style_profile": (data.get("style_profile") or "").strip(),
+        "cast": cast,
         "scenes": scenes,
     }
+
+
+def _clean_names(raw) -> list[str]:
+    """Trimmed, de-duplicated, order preserved."""
+    out, seen = [], set()
+    for item in raw if isinstance(raw, list) else []:
+        name = str(item or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def normalize_cast(raw) -> list[dict]:
+    """Whatever came back, reduced to a usable, capped, slugged cast list.
+
+    Capped at MAX_CAST because every entry is one more billed image, and a story
+    that claims twelve recurring characters has almost always mistaken "appears
+    twice" for "is a main character". The cap is applied to the model's own
+    ordering, which the schema asks for most-important-first.
+    """
+    out, seen = [], set()
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()[:80]
+        description = str(item.get("description") or "").strip()
+        if not name or not description or name in seen:
+            continue
+        seen.add(name)
+        out.append({
+            "name": name,
+            "slug": slugify(name) or f"character-{len(out) + 1}",
+            "description": description,
+        })
+        if len(out) >= config.MAX_CAST:
+            break
+    return out

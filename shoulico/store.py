@@ -20,8 +20,8 @@ from typing import Callable
 from uuid import uuid4
 
 from . import config, engines
-from .naming import (asset_stem, audio_stem, captions_stem, flat_stem,
-                     full_voiceover_stem, narration_key, project_slug,
+from .naming import (anchor_stem, asset_stem, audio_stem, captions_stem,
+                     flat_stem, full_voiceover_stem, narration_key, project_slug,
                      timing_stem, video_stem)
 
 # MP4 because it is the container CapCut, Premiere, Resolve and every phone
@@ -64,6 +64,13 @@ def audio_dir(pid: str) -> Path:
 
 def video_dir(pid: str) -> Path:
     return project_dir(pid) / "video"
+
+
+def cast_dir(pid: str) -> Path:
+    """Character reference portraits. Kept out of images/ deliberately -- they
+    are inputs to the story, not frames of it, and every consumer of images/
+    (export, timeline, assembly) counts what it finds there as scenes."""
+    return project_dir(pid) / "cast"
 
 
 def export_dir(pid: str) -> Path:
@@ -176,6 +183,9 @@ def create(name: str, story: str = "", *, engine: str | None = None,
 
         "engine": engine_key,
         "params": engines.defaults_for(engine_key),
+        # Settings for the engine's video sibling, where it has one. Empty for an
+        # image-only engine, so the key is always present and never guessed at.
+        "clip_params": engines.clip_defaults(engine_key),
         "scene_count": scene_count,
         "narration": {
             "voice": "",                     # narrator tone, fed to Claude
@@ -190,11 +200,19 @@ def create(name: str, story: str = "", *, engine: str | None = None,
             "profile": video_key,
             "params": engines.defaults_for(video_key, engines.SECTION_VIDEO),
         },
+        # Character consistency. On by default: a recurring face that changes
+        # between scenes is the first thing anyone notices, and the fix costs
+        # one extra image per character.
+        "consistency": (config.DEFAULT_CONSISTENCY
+                        if engines.supports_references(engine_key)
+                        else config.CONSISTENCY_OFF),
+        # Filled in by segmentation, one entry per recurring character.
+        "cast": [],
         "scenes": [],
         "spend": {"images": 0, "lines": 0, "actual": 0.0},
     }
     for d in (images_dir(pid), narration_dir(pid), audio_dir(pid),
-              video_dir(pid), export_dir(pid)):
+              video_dir(pid), cast_dir(pid), export_dir(pid)):
         d.mkdir(parents=True, exist_ok=True)
     _write_json(project_file(pid), project)
     _write_json(manifest_file(pid), {})
@@ -248,6 +266,36 @@ def read_manifest(pid: str) -> dict:
         return json.loads(manifest_file(pid).read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def anchor_manifest_entry(pid: str, member: dict, project: dict, *,
+                          engine_model: str, prompt: str, params: dict,
+                          generation_id: str | None, file_name: str, cost,
+                          source_url: str | None) -> dict:
+    """A cast anchor is a billed asset like any other, so it gets a record.
+
+    Keyed on the character rather than a scene ordinal: an anchor belongs to a
+    person, is referenced by many scenes, and has no place in story order.
+    """
+    return {
+        "key": anchor_stem(pid, member["slug"], member.get("version", 1)),
+        "project": pid,
+        "kind": "cast",
+        "character": member["name"],
+        "slug": member["slug"],
+        "version": member.get("version", 1),
+        "engine": project.get("engine"),
+        "model": engine_model,
+        "seed": params.get("seed"),
+        "params": params,
+        "prompt": prompt,
+        "file": file_name,
+        "generation_id": generation_id,
+        "source_url": source_url,
+        "cost": cost,
+        "created_at": now(),
+        "selected": True,
+    }
 
 
 def manifest_entry(pid: str, scene: dict, project: dict, *, engine_model: str,
