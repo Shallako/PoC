@@ -313,6 +313,20 @@ language they wrote in. Two consequences worth knowing:
   (Japanese, Arabic) falls back to `scene` -- the `_NNN_` ordinal is what keeps
   those unique and in order.
 
+**What you type survives a redraw.** The page redraws itself constantly -- every
+settings control does it, and while images are coming back the render poller
+does it every 2.5 seconds. Nothing you have typed is written to disk until you
+press Segment, Save or Write narration, so a redraw that refilled the form from
+the stored project would throw the typing away; that is exactly what used to
+happen when you set a seed halfway through pasting a story.
+
+Two rules now keep it: the step 1 fields are refilled only when a *different*
+project is loaded, and step 2 is patched in place rather than rebuilt, so an
+unsaved prompt keeps its text, its caret and the focus while a render runs. The
+stored text wins in the three places it should -- loading a project, segmenting,
+and Claude writing the narration -- because there the point is to replace what is
+on screen.
+
 Narration length is estimated in words at 150 wpm, or in characters at 350 cpm for
 scripts that do not space their words (Chinese, Japanese). That estimate is
 pre-flight only, and it runs long -- a 13-word line estimates 5.2s and speaks in
@@ -422,7 +436,7 @@ network errors retry three times with backoff. Polling waits up to 3600s per ima
 600 once stranded a paid render that finished later. Speech is a different animal
 -- it came back in ~5s live -- so it polls every 2s up to 300s.
 
-### Stopping things
+## Stopping things
 
 Every phase can be stopped, and each holds its own slot, so cancelling one never
 stops another:
