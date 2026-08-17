@@ -63,14 +63,31 @@ def overloaded(request_id: str = "req_fake0001") -> APIError:
 
 
 class _Stream:
-    def __init__(self, message) -> None:
+    """Iterable, because the real one is and the app now reads it that way.
+
+    The compiler walks the stream so a cancel can land mid-answer instead of
+    only between attempts, so a double that cannot be iterated would let that
+    path go untested. `on_event` is the hook a test uses to do something --
+    press cancel, usually -- while the call is still running.
+    """
+
+    EVENTS = 3          # a real stream delivers hundreds; three proves the loop
+
+    def __init__(self, message, on_event=None) -> None:
         self._message = message
+        self._on_event = on_event
 
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
         return False
+
+    def __iter__(self):
+        for i in range(self.EVENTS):
+            if self._on_event is not None:
+                self._on_event(i)
+            yield object()
 
     def get_final_message(self):
         return self._message
@@ -81,7 +98,7 @@ class _Messages:
         self._fake = fake
 
     def stream(self, **kwargs):
-        return _Stream(self._fake._respond(kwargs))
+        return _Stream(self._fake._respond(kwargs), self._fake.on_event)
 
 
 class FakeClaude:
@@ -93,6 +110,9 @@ class FakeClaude:
         self.segment = default_segment
         self.narration = default_narration
         self.ui = default_ui
+        # Called once per streamed event, mid-call. Set it to cancel from the
+        # inside, which is where a real cancel arrives from.
+        self.on_event = None
         self.messages = _Messages(self)
 
     # -- assertions helpers ------------------------------------------- #

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import (captions, compiler, config, engines, narration, renderful, store,
@@ -69,12 +70,74 @@ def status(pid: str, kind: str = KIND_RENDER) -> dict | None:
     return job.as_dict() if job else None
 
 
+# --------------------------------------------------------------------------- #
+# The other shape of work
+#
+# A render, a voice batch and a video assembly are background jobs with a thread
+# each, so cancelling one is setting that thread's stop event. Segmentation and
+# the narration script are not: they are a single Claude call made inside the
+# request that asked for them, and there is no thread of ours to stop.
+#
+# What there is, is a call that can take minutes -- the retry ladder waits up to
+# twenty seconds between four attempts before it even reaches the fallback model
+# -- with the user watching a disabled button. So an in-flight call registers an
+# event here, the cancel endpoint sets it from a second request, and the call
+# checks it between attempts and between streamed chunks.
+# --------------------------------------------------------------------------- #
+
+KIND_SEGMENT = "segment"
+KIND_NARRATION = "narration"
+
+# A set per slot rather than one event, because nothing stops two segmentations
+# for the same project overlapping -- the button is disabled in the page, which
+# is not the same as being impossible. Cancelling a phase stops every call in
+# flight for it, and each call removes only its own event on the way out.
+_calls: dict[str, set[threading.Event]] = {}
+_calls_guard = threading.Lock()
+
+
+@contextmanager
+def running_call(pid: str, kind: str):
+    """Register an in-flight Claude call so another request can stop it."""
+    slot = _slot(pid, kind)
+    event = threading.Event()
+    with _calls_guard:
+        _calls.setdefault(slot, set()).add(event)
+    try:
+        yield event
+    finally:
+        with _calls_guard:
+            live = _calls.get(slot)
+            if live is not None:
+                live.discard(event)
+                if not live:
+                    del _calls[slot]
+
+
+def call_running(pid: str, kind: str) -> bool:
+    with _calls_guard:
+        return bool(_calls.get(_slot(pid, kind)))
+
+
 def cancel(pid: str, kind: str = KIND_RENDER) -> bool:
+    """Stop whatever is running for this project under `kind`.
+
+    One entry point for both shapes of work, so every phase's cancel endpoint is
+    the same two lines and a new phase cannot accidentally get a different
+    contract from the others.
+    """
     job = job_for(pid, kind)
     if job and job.running:
         job.stop.set()
         return True
-    return False
+    with _calls_guard:
+        events = list(_calls.get(_slot(pid, kind)) or ())
+    stopped = False
+    for event in events:
+        if not event.is_set():
+            event.set()
+            stopped = True
+    return stopped
 
 
 # --------------------------------------------------------------------------- #
