@@ -503,6 +503,16 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
             "cast": [n for n in _clean_names(raw.get("cast")) if n in known],
         })
     scenes.sort(key=lambda s: s["n"])
+    # The schema cannot say "exactly this many", only "an array of these", so the
+    # count is enforced here instead. It is the one field of the answer that
+    # converts directly into money: every scene past this point is another billed
+    # image, and a story arguing the model into two hundred of them is precisely
+    # what a prompt injection would try. Fewer than asked for is tolerated the
+    # way it always has been; more is not an editorial decision to respect.
+    if len(scenes) > scene_count:
+        log.warning("Claude returned %d scenes for a request of %d; keeping the first %d.",
+                    len(scenes), scene_count, scene_count)
+        scenes = scenes[:scene_count]
     # Renumber so the ordinals are always dense and 1-based, whatever came back.
     for i, s in enumerate(scenes, start=1):
         s["n"] = i

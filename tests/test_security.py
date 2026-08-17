@@ -268,6 +268,29 @@ def test_a_model_answer_cannot_stuff_the_project_file(client, claude):
     assert len(store.load(pid)["scenes"][0]["body"]) == security.LIMIT_PROMPT
 
 
+def test_the_answer_cannot_return_more_scenes_than_were_asked_for(client, claude):
+    """The count is the field that converts straight into money.
+
+    An injection that talks the model into two hundred beats would otherwise
+    produce a two-hundred-image plan from a three-image request. The confirm
+    gate would still show the bill, but nothing should get that far.
+    """
+    claude.segment = {
+        "language": {"code": "en", "name": "English", "native_name": "English"},
+        "style_profile": "OWNED",
+        "cast": [],
+        "scenes": [{"ordinal": i, "title": f"T{i}", "beat": "b",
+                    "prompt": "a photograph of a cat", "cast": []}
+                   for i in range(1, 251)],
+    }
+    pid = new_project(client)
+    body = client.post(f"/api/projects/{pid}/segment", json={"scene_count": 3}).json()
+
+    assert len(body["scenes"]) == 3
+    assert [s["n"] for s in body["scenes"]] == [1, 2, 3]
+    assert client.post(f"/api/projects/{pid}/plan", json={}).json()["count"] == 3
+
+
 # --------------------------------------------------------------------------- #
 # Translated interface strings: the one place model output is rendered as HTML
 # --------------------------------------------------------------------------- #

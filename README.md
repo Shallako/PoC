@@ -110,10 +110,37 @@ quoted material rather than as a brief:
   depend on the model having behaved. Titles, beats, prompts, style blocks and
   cast descriptions are stripped of control characters and capped before they
   reach `project.json` -- which matters because that file is read back and
-  replayed into the *next* prompt.
+  replayed into the *next* prompt. The scene count is capped at what was asked
+  for: the schema can say "an array of scenes" but not "exactly twelve", and
+  that number converts directly into money. The cast is capped at `MAX_CAST`
+  for the same reason -- every entry is one more billed portrait.
 
-None of this makes an injection impossible; it makes one unable to escape the
-quotes, unable to reach the DOM, and unable to grow without bound.
+### What that does and does not stop
+
+**Prevented in code, not by the model's judgement:** the fence cannot be closed
+from inside; the reply cannot change shape, because it is schema-constrained;
+it cannot return more scenes or more cast than were asked for; it cannot carry
+control characters or unbounded text into `project.json`; and it cannot reach
+the DOM as markup, because the page escapes model output and the CSP nonce
+blocks anything injected that tried to run.
+
+**Not prevented:** content. A sufficiently good injection can still argue the
+model into writing scene prompts about something other than the story, or into
+rewriting the shared style block. What it gets for that is bounded and visible
+rather than silent:
+
+* every prompt is shown, and editable, on step 2 before anything is rendered;
+* `POST /render` is a 400 without an explicit confirmation, and the plan preview
+  names the exact count and dollar estimate first;
+* the model is never shown either API key -- they go to the SDK and to the
+  `Authorization` header, never into a message -- so there is nothing in the
+  prompt worth exfiltrating;
+* and there is no channel to send anything anywhere: the only outbound host is
+  Renderful, and the browser is held to `connect-src 'self'`.
+
+So the realistic worst case is wasted money on wrong pictures, with a confirm
+dialog and a printed estimate between the injection and the spend. That is a
+bound, not an immunity, and it is the honest description.
 
 Everything above is proved in `tests/test_security.py`. Those tests were checked
 against the code as it was before them: 37 of the 61 fail without the guards.
