@@ -422,8 +422,39 @@ network errors retry three times with backoff. Polling waits up to 3600s per ima
 600 once stranded a paid render that finished later. Speech is a different animal
 -- it came back in ~5s live -- so it polls every 2s up to 300s.
 
-A render and a voice run hold separate job slots, so cancelling one never stops
-the other.
+### Stopping things
+
+Every phase can be stopped, and each holds its own slot, so cancelling one never
+stops another:
+
+| Phase | Endpoint |
+|---|---|
+| Segment | `POST /api/projects/{id}/segment/cancel` |
+| Write narration | `POST /api/projects/{id}/narration/cancel` |
+| Render images | `POST /api/projects/{id}/cancel` |
+| Speak narration | `POST /api/projects/{id}/narration/cancel-audio` |
+| Assemble video | `POST /api/projects/{id}/video/cancel` |
+
+All five answer `{"cancelling": true|false}` — `false` meaning there was nothing
+running, which is an answer rather than an error. Press any of them at any time.
+
+The bottom three are background jobs, so cancelling sets their thread's stop
+event and in-flight work finishes before the run winds up. The top two are not
+jobs at all: they are one Claude call made inside the request that asked for it.
+They are also the two that leave you waiting longest with nothing to press --
+the retry ladder alone can spend a minute before it reaches the fallback model.
+So an in-flight call registers a stop event with `orchestrator.running_call()`,
+the cancel endpoint sets it from a second request, and `compiler._call` checks
+it in the two places the time actually goes: between attempts, and between
+streamed chunks. Leaving the stream mid-answer closes it, so Claude stops
+generating rather than finishing something nobody is waiting for. A cancelled
+call answers **409** and writes nothing to the project.
+
+Two things deliberately have no cancel. Export is a local file copy that
+finishes in milliseconds — a button for it would be decoration. Translating the
+interface is a Claude call and can hang the same way, but it is a preference in
+the header rather than a phase of the workflow; if it becomes a problem, it
+takes the same `running_call` treatment.
 
 **When Claude is overloaded.** `overloaded_error` (HTTP 529) means Anthropic
 turned the request away before the model ran -- it is capacity on their side, it
@@ -596,7 +627,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 235 offline tests, free
+    .venv\Scripts\python -m pytest             # 257 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 The offline suite drives the real FastAPI app against a fake Renderful HTTP

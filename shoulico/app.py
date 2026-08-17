@@ -149,6 +149,16 @@ def _claude_error(e: compiler.ClaudeError) -> HTTPException:
     return HTTPException(status, str(e), headers=headers or None)
 
 
+def _cancelled(what: str) -> HTTPException:
+    """A phase the user stopped on purpose.
+
+    409 rather than an error status: nothing went wrong, the answer simply is
+    not coming. The sentence says what did *not* happen to the project, because
+    that is the question someone asks after pressing stop.
+    """
+    return HTTPException(409, f"{what} was cancelled. Nothing on the project changed.")
+
+
 def _asset(directory, name: str, missing: str) -> FileResponse:
     """Serve one file from one directory, or 404.
 
@@ -483,14 +493,18 @@ def api_segment(pid: str, body: SegmentRequest) -> dict:
     eng = engines.engine(project["engine"])
 
     try:
-        result = compiler.segment(
-            project.get("story", ""), count,
-            style_hint=hint,
-            api_key=config.anthropic_key(),
-            engine_name=eng.get("name", project["engine"]),
-            dialect_notes=eng.get("dialect", {}).get("notes", []),
-            prompt_language=prompt_lang,
-        )
+        with orchestrator.running_call(pid, orchestrator.KIND_SEGMENT) as stop:
+            result = compiler.segment(
+                project.get("story", ""), count,
+                style_hint=hint,
+                api_key=config.anthropic_key(),
+                engine_name=eng.get("name", project["engine"]),
+                dialect_notes=eng.get("dialect", {}).get("notes", []),
+                prompt_language=prompt_lang,
+                stop=stop,
+            )
+    except compiler.Cancelled:
+        raise _cancelled("Segmenting") from None
     except compiler.ClaudeError as e:
         raise _claude_error(e) from None
     except ValueError as e:
@@ -554,6 +568,13 @@ def api_segment(pid: str, body: SegmentRequest) -> dict:
 # Step 3: preview cost, then spend
 # --------------------------------------------------------------------------- #
 
+@app.post("/api/projects/{pid}/segment/cancel")
+def api_cancel_segment(pid: str) -> dict:
+    """Stop a segmentation in flight. Safe to press when nothing is running."""
+    _load(pid)
+    return {"cancelling": orchestrator.cancel(pid, orchestrator.KIND_SEGMENT)}
+
+
 @app.post("/api/projects/{pid}/plan")
 def api_plan(pid: str, body: PlanRequest) -> dict:
     project = _load(pid)
@@ -611,13 +632,17 @@ def api_narration(pid: str, body: NarrationRequest) -> dict:
         settings["seconds_per_scene"] = max(2, min(int(body.seconds_per_scene), 60))
 
     try:
-        lines = narration_mod.generate(
-            project.get("story", ""), project.get("scenes", []),
-            voice=settings.get("voice", ""),
-            seconds_per_scene=int(settings.get("seconds_per_scene", 8)),
-            language=project.get("language"),
-            api_key=config.anthropic_key(),
-        )
+        with orchestrator.running_call(pid, orchestrator.KIND_NARRATION) as stop:
+            lines = narration_mod.generate(
+                project.get("story", ""), project.get("scenes", []),
+                voice=settings.get("voice", ""),
+                seconds_per_scene=int(settings.get("seconds_per_scene", 8)),
+                language=project.get("language"),
+                api_key=config.anthropic_key(),
+                stop=stop,
+            )
+    except compiler.Cancelled:
+        raise _cancelled("Writing the narration") from None
     except compiler.ClaudeError as e:
         raise _claude_error(e) from None
     except ValueError as e:
@@ -636,6 +661,13 @@ def api_narration(pid: str, body: NarrationRequest) -> dict:
                 scene["narration"] = lines[scene["n"]]
 
     return _decorate(store.mutate(pid, apply))
+
+
+@app.post("/api/projects/{pid}/narration/cancel")
+def api_cancel_narration(pid: str) -> dict:
+    """Stop the narration script being written. The audio run has its own."""
+    _load(pid)
+    return {"cancelling": orchestrator.cancel(pid, orchestrator.KIND_NARRATION)}
 
 
 @app.post("/api/projects/{pid}/narration/save")

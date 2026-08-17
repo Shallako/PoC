@@ -338,7 +338,33 @@ def _explain(exc, kind: str, *, attempts: int, waited: float) -> ClaudeError:
                        request_id=_request_id(exc), retry_after=_retry_after(exc))
 
 
-def _stream_once(client, system: str, user: str, schema: dict, model: str, max_tokens: int):
+class Cancelled(RuntimeError):
+    """The user stopped this call before it finished."""
+
+
+# How finely a backoff is sliced so a cancel is felt during one. The ladder waits
+# up to twenty seconds between attempts, and a stop button that does nothing for
+# twenty seconds is a stop button nobody believes.
+CANCEL_POLL_SECONDS = 0.5
+
+
+def _stopped(stop) -> bool:
+    return stop is not None and stop.is_set()
+
+
+def _sleep(seconds: float, stop) -> None:
+    """Wait out a backoff, but give up early if the user cancels."""
+    waited = 0.0
+    while waited < seconds:
+        if _stopped(stop):
+            return
+        step = min(CANCEL_POLL_SECONDS, seconds - waited)
+        time.sleep(step)
+        waited += step
+
+
+def _stream_once(client, system: str, user: str, schema: dict, model: str,
+                 max_tokens: int, stop=None):
     with client.messages.stream(
         model=model,
         max_tokens=max_tokens,
@@ -350,11 +376,18 @@ def _stream_once(client, system: str, user: str, schema: dict, model: str, max_t
         system=system,
         messages=[{"role": "user", "content": user}],
     ) as stream:
+        # Iterated rather than waited on as a whole. A segmentation is a minute
+        # of streaming, and this is the only point inside it where a cancel can
+        # land -- leaving the `with` closes the stream, so Claude stops
+        # generating instead of finishing an answer nobody is waiting for.
+        for _ in stream:
+            if _stopped(stop):
+                raise Cancelled("stopped while Claude was answering")
         return stream.get_final_message()
 
 
 def _call(system: str, user: str, schema: dict, api_key: str | None,
-          model: str, max_tokens: int, meta: dict | None):
+          model: str, max_tokens: int, meta: dict | None, stop=None):
     """Ride out a capacity blip on the requested model, then try the fallback.
 
     Only capacity and connection failures are retried. A bad request or an
@@ -369,12 +402,22 @@ def _call(system: str, user: str, schema: dict, api_key: str | None,
 
     waited, last, kind = 0.0, None, "transient"
     for i, attempt_model in enumerate(plan):
+        # Checked at the top of every attempt as well as inside the stream: the
+        # ladder is where a slow call actually spends its time when Claude is
+        # busy, and starting attempt three after a cancel would be perverse.
+        if _stopped(stop):
+            raise Cancelled("stopped between attempts")
         if i:
             delay = _retry_after(last) or CLAUDE_BACKOFF[min(i - 1, len(CLAUDE_BACKOFF) - 1)]
             waited += delay
-            time.sleep(delay)
+            _sleep(delay, stop)
+            if _stopped(stop):
+                raise Cancelled("stopped while waiting to retry")
         try:
-            message = _stream_once(client, system, user, schema, attempt_model, max_tokens)
+            message = _stream_once(client, system, user, schema, attempt_model,
+                                   max_tokens, stop)
+        except Cancelled:
+            raise
         except Exception as exc:  # noqa: BLE001 - classified on the next line
             kind, last = classify(exc), exc
             if kind == "auth":
@@ -397,9 +440,13 @@ def _call(system: str, user: str, schema: dict, api_key: str | None,
 
 def _structured_call(system: str, user: str, schema: dict, api_key: str | None,
                      model: str, max_tokens: int = 32000,
-                     meta: dict | None = None) -> dict:
-    """One streamed, schema-constrained Claude call, ridden through overloads."""
-    message = _call(system, user, schema, api_key, model, max_tokens, meta)
+                     meta: dict | None = None, stop=None) -> dict:
+    """One streamed, schema-constrained Claude call, ridden through overloads.
+
+    `stop` is a threading.Event the caller may set from another request to
+    abandon the call -- see orchestrator.running_call().
+    """
+    message = _call(system, user, schema, api_key, model, max_tokens, meta, stop)
 
     if message.stop_reason == "refusal":
         details = getattr(message, "stop_details", None)
@@ -453,7 +500,8 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
             model: str = config.DEFAULT_CLAUDE_MODEL,
             engine_name: str = "Seedream 5.0 Pro",
             dialect_notes: list[str] | None = None,
-            prompt_language: str = "story") -> dict:
+            prompt_language: str = "story",
+            stop=None) -> dict:
     """Return {'language','model','fell_back','style_profile','scenes'}."""
     story = (story or "").strip()
     if not story:
@@ -478,7 +526,8 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
     )
 
     meta: dict = {}
-    data = _structured_call(SEGMENT_SYSTEM, user, SEGMENT_SCHEMA, api_key, model, meta=meta)
+    data = _structured_call(SEGMENT_SYSTEM, user, SEGMENT_SCHEMA, api_key, model,
+                            meta=meta, stop=stop)
 
     cast = normalize_cast(data.get("cast"))
     known = {c["name"] for c in cast}

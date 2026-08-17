@@ -185,6 +185,7 @@
 
     <div class="panel">
       <button class="btn" id="segmentBtn" data-i18n="s1.segment">Segment with Claude →</button>
+      <button class="btn ghost hidden" id="cancelSegmentBtn" data-i18n="s1.cancel">Cancel</button>
       <span class="muted" id="segmentMsg" style="margin-left:10px"></span>
     </div>
   </section>
@@ -229,6 +230,7 @@
         </div>
         <div style="align-self:flex-end">
           <button class="btn ghost" id="narrBtn" data-i18n="s2.write">Write narration</button>
+          <button class="btn ghost hidden" id="cancelNarrBtn" data-i18n="s2.narr.cancel">Cancel</button>
         </div>
       </div>
       <div class="muted" id="narrTotal" style="margin-top:8px"></div>
@@ -511,6 +513,9 @@ const DYN = {
   "err.retryAfter": "Suggested wait: {seconds}s",
   "s1.fellBack": "{wanted} was overloaded, so {used} wrote these scenes instead. Re-segment later if you want the first model to do it.",
   "cancel.started": "Cancelling — in-flight images finish first.",
+  // A Claude call is one request, not a batch, so it stops where it is rather
+  // than letting anything in flight finish.
+  "cancel.stopping": "Stopping — nothing will be written to the project.",
   "cancel.idle": "Nothing is running.",
   "job.fatal": "The run stopped early: {error}\n\nRenderful is out of credit or rate limiting the account. Add funds, then render again — scenes that already downloaded are skipped automatically.",
   "boot.failed": "Could not start: {error}",
@@ -1535,6 +1540,7 @@ $("consistency").addEventListener("change", async (e) => {
 $("segmentBtn").onclick = async () => {
   clearAlerts();
   const btn = $("segmentBtn"); btn.disabled = true; $("segmentMsg").textContent = t("segmenting");
+  $("cancelSegmentBtn").classList.remove("hidden");
   try {
     P = await api(`/projects/${P.id}`, "PATCH", {
       name: $("projName").value, story: $("story").value,
@@ -1551,7 +1557,7 @@ $("segmentBtn").onclick = async () => {
     }
     await applyLanguage();
   } catch (err) { alertBox(err); $("segmentMsg").textContent = ""; }
-  finally { btn.disabled = false; }
+  finally { btn.disabled = false; $("cancelSegmentBtn").classList.add("hidden"); }
 };
 
 $("saveScenesBtn").onclick = async () => {
@@ -1573,6 +1579,7 @@ $("saveScenesBtn").onclick = async () => {
 $("narrBtn").onclick = async () => {
   clearAlerts();
   const btn = $("narrBtn"); btn.disabled = true; btn.textContent = t("writing");
+  $("cancelNarrBtn").classList.remove("hidden");
   try {
     P = await api(`/projects/${P.id}`, "PATCH", { scenes: collectScenePatch(), style_profile: $("styleProfile").value });
     P = await api(`/projects/${P.id}/narration`, "POST", {
@@ -1581,11 +1588,27 @@ $("narrBtn").onclick = async () => {
     redraw(true);          // Claude just rewrote every line; show what it wrote
     refreshTtsPlan();
   } catch (err) { alertBox(err); }
-  finally { btn.disabled = false; btn.textContent = t("s2.write"); }
+  finally {
+    btn.disabled = false; btn.textContent = t("s2.write");
+    $("cancelNarrBtn").classList.add("hidden");
+  }
 };
 
 $("speakBtn").onclick = () => doSpeak(null);
 $("forceSpeak").addEventListener("change", refreshTtsPlan);
+// The two Claude phases. Same contract as the three batch cancels beside them:
+// press it any time, and it says plainly whether there was anything to stop.
+$("cancelSegmentBtn").onclick = async () => {
+  try { const r = await api(`/projects/${P.id}/segment/cancel`, "POST");
+        alertBox(r.cancelling ? t("cancel.stopping") : t("cancel.idle"), "note"); }
+  catch (err) { alertBox(err); }
+};
+$("cancelNarrBtn").onclick = async () => {
+  try { const r = await api(`/projects/${P.id}/narration/cancel`, "POST");
+        alertBox(r.cancelling ? t("cancel.stopping") : t("cancel.idle"), "note"); }
+  catch (err) { alertBox(err); }
+};
+
 $("cancelSpeakBtn").onclick = async () => {
   try { const r = await api(`/projects/${P.id}/narration/cancel-audio`, "POST");
         alertBox(r.cancelling ? t("cancel.started") : t("cancel.idle"), "note"); }
