@@ -23,6 +23,7 @@ from . import config, engines
 from .naming import (anchor_stem, asset_stem, audio_stem, captions_stem,
                      flat_stem, full_voiceover_stem, narration_key, project_slug,
                      timing_stem, video_stem)
+from .security import project_id
 
 # MP4 because it is the container CapCut, Premiere, Resolve and every phone
 # already open without being told anything.
@@ -47,7 +48,15 @@ def now() -> str:
 # --------------------------------------------------------------------------- #
 
 def project_dir(pid: str) -> Path:
-    return config.PROJECTS_DIR / pid
+    """The one place a project id becomes a filesystem path.
+
+    Validated here rather than at each endpoint because this is the function
+    every other path helper is built on: a route added next year gets the check
+    without its author having to know it exists. `..\\..\\elsewhere` reached this
+    line as a URL segment and read a project.json two directories above the
+    sandbox before it did.
+    """
+    return config.PROJECTS_DIR / project_id(pid)
 
 
 def images_dir(pid: str) -> Path:

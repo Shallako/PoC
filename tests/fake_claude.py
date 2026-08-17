@@ -179,11 +179,24 @@ def default_segment(kwargs: dict) -> dict:
     }
 
 
+def fenced_body(user: str, tag: str) -> str:
+    """What sits inside <tag-NONCE> ... </tag-NONCE>, whatever the nonce is.
+
+    Untrusted text reaches Claude inside a fence carrying a per-call random
+    suffix, so the double reads it the same way the model has to: find the
+    opening marker, then require the *same* nonce to close it. A fence that did
+    not match itself would fail here rather than quietly returning half a story.
+    """
+    match = re.search(rf"<{tag}-([0-9a-f]{{8,}})>\n(.*)\n</{tag}-\1>", user, re.S)
+    assert match is not None, f"no <{tag}-...> fence in the prompt"
+    return match.group(2)
+
+
 def default_ui(kwargs: dict) -> dict:
     """Echo every key back with a marker, so a test can tell translated from source."""
     user = kwargs["messages"][0]["content"]
-    body = json.loads(re.search(r"<strings>\n(.*)\n</strings>", user, re.S).group(1))
-    return {"items": [{"key": k, "text": f"[fr] {v}"} for k, v in body.items()]}
+    return {"items": [{"key": k, "text": f"[fr] {v}"}
+                      for k, v in json.loads(fenced_body(user, "strings")).items()]}
 
 
 def default_narration(kwargs: dict) -> dict:

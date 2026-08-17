@@ -23,6 +23,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from . import security
 from .config import RENDERFUL_API_BASE
 
 POLL_SECONDS = 5
@@ -154,15 +155,35 @@ def wait_for(gen_id: str, key: str, should_stop=None, on_state=None, *,
 
 
 def download(url: str, timeout: int = 120) -> bytes:
+    """Fetch one delivered asset.
+
+    The URL is whatever the API put in the response, and it is handed straight
+    to urlopen -- which speaks file:// as fluently as https://. A response
+    pointing at `file:///C:/Users/you/anthropic_key.txt` would have been read and
+    saved into the project as that scene's picture. The scheme is checked before
+    the first attempt and the read is bounded, so neither a redirect nor an
+    endless stream turns a render into something else.
+    """
+    security.check_download_url(url)
     last: Exception | None = None
     for attempt in range(1, HTTP_RETRIES + 1):
         try:
             with urllib.request.urlopen(url, timeout=timeout) as resp:
-                return resp.read()
+                # One byte past the ceiling is all it takes to know it was
+                # crossed, and it costs nothing to trust that rather than a
+                # Content-Length the sender chose for us.
+                data = resp.read(security.MAX_DOWNLOAD_BYTES + 1)
         except Exception as e:  # noqa: BLE001 - retry anything transient
             last = e
             if attempt < HTTP_RETRIES:
                 time.sleep(2 * attempt)
+            continue
+        # Outside the retry: an asset that is too big now will be too big again.
+        if len(data) > security.MAX_DOWNLOAD_BYTES:
+            raise RuntimeError(
+                f"refusing an asset larger than the "
+                f"{security.MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB limit")
+        return data
     raise RuntimeError(f"download failed: {last}")
 
 
