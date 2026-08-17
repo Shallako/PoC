@@ -851,6 +851,37 @@ function statusLabel(s) {
   return { cls: key, text: t("status." + key) === "status." + key ? key : t("status." + key) };
 }
 
+// Step 2 is redrawn under the user constantly -- the render poller redraws it
+// every 2.5 seconds while images come back, and every settings control redraws
+// it too. So the text they have typed and not yet saved is remembered here and
+// written back over whatever the stored project says. Cleared the moment the
+// stored text becomes the right answer: a project load, a segment, a save, or
+// narration being written.
+const EDITS = new Map();
+
+function editKey(el) {
+  if (el.dataset.scene) return `scene:${el.dataset.scene}:${el.dataset.field}`;
+  if (el.dataset.cast) return `cast:${el.dataset.cast}`;
+  return el.id;
+}
+
+// Assigning .value moves the caret to the end of a textarea, so a field that
+// already reads correctly is left alone rather than rewritten with the string
+// it already holds. That is what makes typing survive a redraw mid-keystroke.
+function setField(el, value) {
+  const key = editKey(el);
+  const want = EDITS.has(key) ? EDITS.get(key) : value;
+  if (el.value !== want) el.value = want;
+}
+
+// Replace markup only when it would actually differ. A needless innerHTML write
+// re-requests every image inside it and stops any audio being played from it.
+function setHtml(el, sig, build) {
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  el.innerHTML = build();
+}
+
 function renderCast() {
   const panel = $("castPanel"), box = $("castList"), toggle = $("consistency");
   // An engine with no reference sibling cannot do this at all, so the control
@@ -858,75 +889,130 @@ function renderCast() {
   toggle.checked = P.consistency === "cast";
   toggle.disabled = !P.supports_references;
   panel.classList.toggle("hidden", !P.scenes.length);
-  box.innerHTML = "";
-  if (!P.supports_references) {
-    box.innerHTML = `<div class="muted">${escapeHtml(t("cast.unsupported"))}</div>`;
-    return;
+
+  const cast = P.supports_references ? (P.cast || []) : [];
+  // Rebuilt only when the cast itself changes, or the interface language does
+  // -- that rewrites every label in the card. Otherwise the cards stay put and
+  // are patched, so a description being edited keeps its caret.
+  const key = [LANG.code, P.supports_references, cast.map((c) => c.slug).join(",")].join("|");
+  if (box.dataset.key !== key) {
+    box.dataset.key = key;
+    box.innerHTML = "";
+    if (!P.supports_references) {
+      box.innerHTML = `<div class="muted">${escapeHtml(t("cast.unsupported"))}</div>`;
+    } else if (!cast.length) {
+      box.innerHTML = `<div class="muted">${escapeHtml(t("cast.none"))}</div>`;
+    } else {
+      cast.forEach((c) => {
+        const el = document.createElement("div");
+        el.className = "scene";
+        el.dataset.member = c.slug;
+        el.innerHTML = `
+          <header data-part="head"></header>
+          <div class="row">
+            <div style="flex:3">
+              <textarea class="mono" rows="3" data-cast="${escapeHtml(c.slug)}"></textarea>
+            </div>
+            <div style="flex:1" data-part="shot"></div>
+          </div>`;
+        box.appendChild(el);
+      });
+    }
   }
-  if (!(P.cast || []).length) {
-    box.innerHTML = `<div class="muted">${escapeHtml(t("cast.none"))}</div>`;
-    return;
-  }
-  P.cast.forEach((c) => {
-    const el = document.createElement("div");
-    el.className = "scene";
-    const shot = c.asset
+
+  const cards = box.querySelectorAll("[data-member]");
+  cast.forEach((c, i) => {
+    const el = cards[i];
+    if (!el) return;
+    el.querySelector('[data-part="head"]').innerHTML =
+      `<strong>${escapeHtml(c.name)}</strong>` +
+      (c.dirty ? `<span class="badge warn">${escapeHtml(t("cast.dirty"))}</span>` : "") +
+      (c.status === "failed"
+        ? `<span class="badge bad">${escapeHtml(c.detail || "failed")}</span>` : "");
+    setHtml(el.querySelector('[data-part="shot"]'), c.asset || "", () => c.asset
       ? `<img class="thumb" src="/api/projects/${P.id}/cast/${encodeURIComponent(c.asset)}" alt="">`
-      : `<div class="muted">${escapeHtml(t("cast.norender"))}</div>`;
-    el.innerHTML = `
-      <header>
-        <strong>${escapeHtml(c.name)}</strong>
-        ${c.dirty ? `<span class="badge warn">${escapeHtml(t("cast.dirty"))}</span>` : ""}
-        ${c.status === "failed" ? `<span class="badge bad">${escapeHtml(c.detail || "failed")}</span>` : ""}
-      </header>
-      <div class="row">
-        <div style="flex:3">
-          <textarea class="mono" rows="3" data-cast="${escapeHtml(c.slug)}">${escapeHtml(c.description || "")}</textarea>
-        </div>
-        <div style="flex:1">${shot}</div>
-      </div>`;
-    box.appendChild(el);
+      : `<div class="muted">${escapeHtml(t("cast.norender"))}</div>`);
+    setField(el.querySelector("[data-cast]"), c.description || "");
   });
 }
 
-function renderScenes() {
-  $("styleProfile").value = P.style_profile || "";
+function renderScenes(refill) {
+  if (refill) EDITS.clear();
+  setField($("styleProfile"), P.style_profile || "");
   renderCast();
   const box = $("sceneList");
-  box.innerHTML = "";
   if (!P.scenes.length) {
-    box.innerHTML = `<div class="panel muted">${escapeHtml(t("scene.none"))}</div>`;
+    if (box.dataset.key !== "none") {
+      box.dataset.key = "none";
+      box.innerHTML = `<div class="panel muted">${escapeHtml(t("scene.none"))}</div>`;
+    }
     $("narrTotal").textContent = "";
     return;
   }
-  P.scenes.forEach((s) => {
-    const el = document.createElement("div");
-    el.className = "scene";
-    const st = statusLabel(s);
-    el.innerHTML = `
-      <header>
-        <span class="ord">${String(s.n).padStart(3, "0")}</span>
-        <input type="text" data-scene="${s.n}" data-field="title" value="${escapeHtml(s.title || "")}">
-        <span class="status ${st.cls}">${escapeHtml(st.text)}</span>
-      </header>
-      <label><span>${escapeHtml(t("scene.prompt"))}</span>
-        <span class="counter">${escapeHtml(tf("scene.chars", { count: s.prompt_chars }))}</span></label>
-      <textarea class="mono" rows="4" data-scene="${s.n}" data-field="body">${escapeHtml(s.body || "")}</textarea>
-      <label><span>${escapeHtml(t("scene.narration"))}</span>
-        <span class="counter">${escapeHtml(sceneLength(s))}</span></label>
-      <textarea rows="2" data-scene="${s.n}" data-field="narration">${escapeHtml(s.narration || "")}</textarea>
-      ${sceneAudio(s)}
-      <details><summary>${escapeHtml(t("scene.compiled"))}</summary>
-        <pre class="prompt">${escapeHtml(s.compiled_prompt)}</pre></details>`;
-    box.appendChild(el);
-  });
-  // data-speak, not data-scene: collectScenePatch() sweeps every [data-scene]
-  // element into the save payload, and a button has no field to contribute.
-  box.querySelectorAll("[data-speak]").forEach((b) => {
-    b.onclick = () => doSpeak([Number(b.dataset.speak)], true);
-  });
+  // Same rule as the cast: rebuild only when the set of scenes changes or the
+  // language does. A render in flight changes statuses and pictures, not the
+  // shape of the list, so those redraws patch what is already on screen.
+  const key = [LANG.code, P.scenes.map((s) => s.n).join(",")].join("|");
+  if (box.dataset.key !== key) {
+    box.dataset.key = key;
+    box.innerHTML = "";
+    P.scenes.forEach((s) => {
+      const el = document.createElement("div");
+      el.className = "scene";
+      el.dataset.card = s.n;
+      el.innerHTML = `
+        <header>
+          <span class="ord">${String(s.n).padStart(3, "0")}</span>
+          <input type="text" data-scene="${s.n}" data-field="title">
+          <span class="status" data-part="status"></span>
+        </header>
+        <label><span>${escapeHtml(t("scene.prompt"))}</span>
+          <span class="counter" data-part="chars"></span></label>
+        <textarea class="mono" rows="4" data-scene="${s.n}" data-field="body"></textarea>
+        <label><span>${escapeHtml(t("scene.narration"))}</span>
+          <span class="counter" data-part="len"></span></label>
+        <textarea rows="2" data-scene="${s.n}" data-field="narration"></textarea>
+        <div data-part="audio"></div>
+        <details><summary>${escapeHtml(t("scene.compiled"))}</summary>
+          <pre class="prompt" data-part="prompt"></pre></details>`;
+      box.appendChild(el);
+    });
+  }
+
+  const cards = box.querySelectorAll("[data-card]");
+  P.scenes.forEach((s, i) => { if (cards[i]) patchScene(cards[i], s); });
   renderNarrationTotal();
   renderTtsTotal();
+}
+
+// The half of a scene card the app owns: status, both counters, the audio row
+// and the compiled prompt. Written in place, because replacing the card would
+// take the caret out of whichever textarea is being typed into.
+function patchScene(el, s) {
+  const st = statusLabel(s);
+  const status = el.querySelector('[data-part="status"]');
+  status.className = `status ${st.cls}`;
+  status.textContent = st.text;
+  el.querySelector('[data-part="chars"]').textContent = tf("scene.chars", { count: s.prompt_chars });
+  el.querySelector('[data-part="len"]').textContent = sceneLength(s);
+  el.querySelector('[data-part="prompt"]').textContent = s.compiled_prompt;
+
+  const audio = el.querySelector('[data-part="audio"]');
+  const sig = [LANG.code, s.audio || "", s.audio_seconds || "", s.audio_measured,
+               s.audio_status || "", s.audio_detail || "",
+               (s.narration || "").trim() ? moneyFine(priceForLine(s)) : "silent"].join("|");
+  if (audio.dataset.sig !== sig) {
+    audio.dataset.sig = sig;
+    audio.innerHTML = sceneAudio(s);
+    // data-speak, not data-scene: collectScenePatch() sweeps every [data-scene]
+    // element into the save payload, and a button has no field to contribute.
+    const b = audio.querySelector("[data-speak]");
+    if (b) b.onclick = () => doSpeak([Number(b.dataset.speak)], true);
+  }
+
+  setField(el.querySelector('[data-field="title"]'), s.title || "");
+  setField(el.querySelector('[data-field="body"]'), s.body || "");
+  setField(el.querySelector('[data-field="narration"]'), s.narration || "");
 }
 
 // The duration is the number every downstream step needs, so it says plainly
@@ -1338,12 +1424,16 @@ function fillInputs() {
 
 // Everything the app draws for itself. Safe to run at any moment, because it
 // writes no control the user could be halfway through filling in.
-function redraw() {
+//
+// `refill` says the stored text has become the right answer -- a project was
+// loaded, or a save or a narration run just replaced it -- so step 2 drops any
+// unsaved edit it was holding rather than writing it back over the new text.
+function redraw(refill) {
   $("uiLang").value = UI_MODE;
   const label = langLabel(P.language);
   $("detectedLang").textContent = label ? tf("lang.detected", { language: label }) : t("lang.undetected");
   updateStoryCount();
-  renderEngines(); renderVoices(); renderScenes(); renderGallery();
+  renderEngines(); renderVoices(); renderScenes(refill); renderGallery();
   renderVideo(); renderVideoResult();
   $("cbSpent").textContent = money((P.spend && P.spend.actual) || 0);
   if (P.job && P.job.running && !POLL) startPolling();
@@ -1355,7 +1445,7 @@ function redraw() {
 // filled from it. This is the one path that may overwrite what is typed.
 function renderAll() {
   fillInputs();
-  redraw();
+  redraw(true);
 }
 
 function updateStoryCount() {
@@ -1403,6 +1493,16 @@ async function newProject() {
 
 // ------------------------------------------------------------------ wiring
 $("story").addEventListener("input", updateStoryCount);
+// Step 2 is redrawn under the user constantly, so remember what they type until
+// it is saved. See setField() -- this is what a redraw writes back.
+["sceneList", "castList", "styleProfile"].forEach((id) => {
+  $(id).addEventListener("input", (e) => {
+    const el = e.target;
+    if (el.dataset.scene || el.dataset.cast || el.id === "styleProfile") {
+      EDITS.set(editKey(el), el.value);
+    }
+  });
+});
 $("projectPicker").addEventListener("change", (e) => loadProjects(e.target.value));
 $("newProjectBtn").onclick = () => newProject().catch((e) => alertBox(e));
 $("deleteProjectBtn").onclick = async () => {
@@ -1461,7 +1561,7 @@ $("saveScenesBtn").onclick = async () => {
       style_profile: $("styleProfile").value, scenes: collectScenePatch(),
       cast: collectCastPatch(),
     });
-    redraw();
+    redraw(true);          // what was on screen is now what is on disk
     // An edited line is a line that has to be spoken again, and that changes
     // both the batch and its price.
     refreshTtsPlan();
@@ -1478,7 +1578,7 @@ $("narrBtn").onclick = async () => {
     P = await api(`/projects/${P.id}/narration`, "POST", {
       voice: $("narrVoice").value, seconds_per_scene: Number($("narrSecs").value),
     });
-    redraw();
+    redraw(true);          // Claude just rewrote every line; show what it wrote
     refreshTtsPlan();
   } catch (err) { alertBox(err); }
   finally { btn.disabled = false; btn.textContent = t("s2.write"); }
