@@ -7,16 +7,22 @@ flag (FR-303, FR-806, NFR-3).
 
 from __future__ import annotations
 
-from pathlib import Path
+import secrets
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from . import (captions, compiler, config, engines, i18n,
-               narration as narration_mod, orchestrator, store, timeline, video)
+               narration as narration_mod, orchestrator, security, store,
+               timeline, video)
 
 app = FastAPI(title="Shoulico (local MVP)", docs_url="/api/docs", redoc_url=None)
+
+# Outermost, so a request from somewhere it should not be is refused before any
+# route, body parse or file read happens. See security.py for what it stops and
+# why a localhost API with no authentication needs it at all.
+app.add_middleware(security.LocalOnly)
 
 
 # --------------------------------------------------------------------------- #
@@ -118,6 +124,10 @@ def _load(pid: str) -> dict:
         return store.load(pid)
     except FileNotFoundError:
         raise HTTPException(404, f"No project {pid!r}") from None
+    except security.BadProjectId:
+        # Not a 400: an id this app could never have minted names no project, and
+        # saying so in the same words as a missing one tells a prober nothing.
+        raise HTTPException(404, "No project by that name.") from None
 
 
 def _claude_error(e: compiler.ClaudeError) -> HTTPException:
@@ -137,6 +147,22 @@ def _claude_error(e: compiler.ClaudeError) -> HTTPException:
     if status == 503:
         headers["Retry-After"] = str(int(e.retry_after or 30))
     return HTTPException(status, str(e), headers=headers or None)
+
+
+def _asset(directory, name: str, missing: str) -> FileResponse:
+    """Serve one file from one directory, or 404.
+
+    Every asset route goes through here so that "the name in the URL cannot
+    leave this folder" is written once and provable once, rather than being a
+    `Path(name).name` that each route has to remember on its own.
+    """
+    try:
+        path = security.safe_child(directory, name)
+    except security.BadProjectId:
+        raise HTTPException(404, missing) from None
+    if not path.is_file():
+        raise HTTPException(404, missing)
+    return FileResponse(path)
 
 
 def _prompt_language(value: str | None) -> str:
@@ -240,8 +266,21 @@ def _decorate(project: dict) -> dict:
 # --------------------------------------------------------------------------- #
 
 @app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return (config.STATIC_DIR / "index.html").read_text(encoding="utf-8")
+def index() -> HTMLResponse:
+    """The wizard, served under a fresh Content-Security-Policy nonce.
+
+    The page's own script is the only one that gets the nonce, which is what
+    lets the policy refuse every *other* inline script -- including the inline
+    event handler a scene title or a translated string would have to become in
+    order to do any damage.
+    """
+    nonce = secrets.token_urlsafe(16)
+    html = (config.STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    html = html.replace("<script>", f'<script nonce="{nonce}">', 1)
+    return HTMLResponse(html, headers={
+        "Content-Security-Policy": security.page_csp(nonce),
+        "Cache-Control": "no-store",
+    })
 
 
 # --------------------------------------------------------------------------- #
@@ -546,11 +585,7 @@ def api_cancel(pid: str) -> dict:
 @app.get("/api/projects/{pid}/image/{name}")
 def api_image(pid: str, name: str):
     _load(pid)
-    safe = Path(name).name
-    path = store.images_dir(pid) / safe
-    if not path.is_file():
-        raise HTTPException(404, "No such image")
-    return FileResponse(path)
+    return _asset(store.images_dir(pid), name, "No such image")
 
 
 @app.get("/api/projects/{pid}/cast/{name}")
@@ -559,11 +594,7 @@ def api_cast_image(pid: str, name: str):
     outside images/ -- everything that reads images/ counts what it finds there
     as scenes."""
     _load(pid)
-    safe = Path(name).name
-    path = store.cast_dir(pid) / safe
-    if not path.is_file():
-        raise HTTPException(404, "No such reference portrait")
-    return FileResponse(path)
+    return _asset(store.cast_dir(pid), name, "No such reference portrait")
 
 
 # --------------------------------------------------------------------------- #
@@ -681,11 +712,7 @@ def api_cancel_audio(pid: str) -> dict:
 @app.get("/api/projects/{pid}/audio/{name}")
 def api_audio(pid: str, name: str):
     _load(pid)
-    safe = Path(name).name
-    path = store.audio_dir(pid) / safe
-    if not path.is_file():
-        raise HTTPException(404, "No such audio")
-    return FileResponse(path)
+    return _asset(store.audio_dir(pid), name, "No such audio")
 
 
 # --------------------------------------------------------------------------- #
@@ -748,11 +775,7 @@ def api_cancel_video(pid: str) -> dict:
 @app.get("/api/projects/{pid}/video/{name}")
 def api_video_file(pid: str, name: str):
     _load(pid)
-    safe = Path(name).name
-    path = store.video_dir(pid) / safe
-    if not path.is_file():
-        raise HTTPException(404, "No such video")
-    return FileResponse(path)
+    return _asset(store.video_dir(pid), name, "No such video")
 
 
 @app.get("/api/projects/{pid}/captions.{fmt}")

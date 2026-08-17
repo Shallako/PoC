@@ -114,7 +114,10 @@ def sandbox(tmp_path, monkeypatch, request):
 
 @pytest.fixture
 def client():
-    with TestClient(app) as c:
+    # A real loopback base URL, not TestClient's default "testserver": the app
+    # refuses a Host header that is not an IP literal or localhost, and the whole
+    # suite should be running through that guard rather than around it.
+    with TestClient(app, base_url="http://127.0.0.1:8765") as c:
         yield c
 
 

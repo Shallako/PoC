@@ -15,7 +15,7 @@ import json
 import threading
 from typing import Any
 
-from . import config
+from . import config, security
 
 _lock = threading.Lock()
 _cache: dict | None = None
@@ -748,9 +748,15 @@ def _validate_inputs(name: str, inputs: list, params: dict | None) -> dict:
             out[k] = bool(value)
 
         elif kind == "text":
-            text = ("" if value is None else str(value)).strip()
+            # Bounded and de-controlled: a text parameter is the one control
+            # whose value goes into an API payload verbatim, and `model_id` in
+            # particular becomes the model this app is billed for.
+            limit = int(spec.get("max_chars") or security.LIMIT_PARAM_TEXT)
+            text = security.clean(value, limit + 1)
             if spec.get("required", k == "model_id") and not text:
                 raise ParamError(f"{spec['label']}: required")
+            if len(text) > limit:
+                raise ParamError(f"{spec['label']}: at most {limit} characters")
             out[k] = text
 
         else:
