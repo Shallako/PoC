@@ -57,15 +57,27 @@ NARRATION_EFFORT = "medium"
 TRANSLATE_MODEL = "claude-sonnet-5"
 TRANSLATE_EFFORT = "low"
 
-MAX_STORY_CHARS = 5000                        # FR-101
+MAX_STORY_CHARS = 10000                        # FR-101
 DEFAULT_SCENE_COUNT = 12
 MAX_SCENE_COUNT = 40
-# Concurrent generations. Twelve images at three workers is four rounds; at five
-# it is three, and the wall-clock follows. Raised only once a 429 stopped being
-# fatal -- more workers means more throttles, and before that every throttle
-# killed the whole batch. Renderful publishes no concurrency limit, so this is a
-# dial: if 429s start showing up in the log, turn it back down.
-WORKERS = 5
+# Concurrent generations, and the only lever left on a render's wall-clock.
+#
+# Measured on a real 14-scene run: a seedream image takes about 131 seconds, and
+# the pool sat pegged at its full width for the whole job. So the client never
+# makes an image faster -- it only decides how many 131-second waits happen at
+# once, and the job takes ceil(scenes / WORKERS) rounds. That run took 6.6
+# minutes at five; three workers would have been five rounds and about eleven.
+#
+# Seven rather than six because rounds move in steps, not smoothly: fourteen
+# scenes is three rounds at both five and six workers, and two at seven. The
+# right number depends on the batch, and past the point where one round covers
+# the whole job it buys nothing at all.
+#
+# Safe to raise only because a 429 stopped being fatal -- more workers means
+# more throttles, and before that every throttle killed the batch. Renderful
+# publishes no concurrency limit, so this is a dial: if 429s start showing up
+# in the log, turn it back down.
+WORKERS = 7
 
 # Pre-flight duration estimates only. A live measurement replaces these the
 # moment narration audio exists: 13 words measured 4.0s against the 5.2s these
