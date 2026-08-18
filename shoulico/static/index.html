@@ -147,8 +147,8 @@
         the set consistent. Prompts, titles and narration come back in the language you wrote in.</p>
       <label><span data-i18n="s1.name">Project name</span></label>
       <input type="text" id="projName" data-i18n-ph="s1.name.ph" placeholder="Boston on MV">
-      <label><span data-i18n="s1.story">Story</span> <span class="counter" id="storyCount">0 / 5000</span></label>
-      <textarea id="story" rows="12" data-i18n-ph="s1.story.ph" placeholder="Paste up to 5,000 characters…"></textarea>
+      <label><span data-i18n="s1.story">Story</span> <span class="counter" id="storyCount"></span></label>
+      <textarea id="story" rows="12" data-i18n-ph="s1.story.ph" placeholder="Paste up to {storyMax} characters…"></textarea>
       <div class="row">
         <div>
           <label><span data-i18n="s1.count">Number of images</span></label>
@@ -582,9 +582,18 @@ function harvestStrings() {
   document.querySelectorAll("[data-i18n-ph]").forEach((el) => { SOURCE[el.dataset.i18nPh] = el.placeholder; });
   Object.keys(DYN).forEach((k) => { SOURCE[k] = DYN[k]; });
 }
+// Numbers in the page that the server owns. A limit typed into the markup
+// disagrees with config.py the moment anyone changes it, and disagrees
+// silently: the counter just turns red on input the server would have taken.
+function staticVars() {
+  const max = STATUS && STATUS.max_story_chars;
+  return { storyMax: max ? max.toLocaleString() : "" };
+}
+
 function applyStatic() {
-  document.querySelectorAll("[data-i18n]").forEach((el) => { el.innerHTML = t(el.dataset.i18n); });
-  document.querySelectorAll("[data-i18n-ph]").forEach((el) => { el.placeholder = t(el.dataset.i18nPh); });
+  const vars = staticVars();
+  document.querySelectorAll("[data-i18n]").forEach((el) => { el.innerHTML = tf(el.dataset.i18n, vars); });
+  document.querySelectorAll("[data-i18n-ph]").forEach((el) => { el.placeholder = tf(el.dataset.i18nPh, vars); });
 }
 function isEnglish(code) { return !code || /^en(-|$)/i.test(code); }
 
@@ -1455,9 +1464,12 @@ function renderAll() {
 
 function updateStoryCount() {
   const n = $("story").value.length;
+  const max = STATUS && STATUS.max_story_chars;
   const el = $("storyCount");
-  el.textContent = `${n} / 5000`;
-  el.classList.toggle("over", n > 5000);
+  // Before /api/status has answered there is no limit to show, and inventing
+  // one here is how the page and the server drift apart in the first place.
+  el.textContent = max ? `${n} / ${max}` : String(n);
+  el.classList.toggle("over", !!max && n > max);
 }
 
 async function loadProjects(selectId) {
@@ -1479,6 +1491,11 @@ async function boot() {
   VOICES = await api("/voices");
   VIDEO = await api("/video-profiles");
   STATUS = await api("/status");
+  // Before anything is drawn, and unconditionally: applyLanguage() short-circuits
+  // when the language has not changed, which on an English boot is always. That
+  // was harmless while the markup held its final text and is not now that it
+  // holds {storyMax} for the server to fill in.
+  applyStatic();
   renderKeys();
   const have = await loadProjects();
   if (!have) await newProject();

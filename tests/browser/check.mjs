@@ -95,6 +95,40 @@ await page.evaluate(() => renderScenes());
 check("step 2: the style block survives too",
       (await page.inputValue("#styleProfile")) === STYLE);
 
+// ---------------------------------------------------------------- the limit
+// The story limit belongs to config.py. The page used to repeat it in four
+// places, so raising it gave a server that accepted the story and a counter
+// that turned red on it.
+const limit = await page.evaluate(() => STATUS && STATUS.max_story_chars);
+check("limit: the page knows the server's maximum", typeof limit === "number",
+      `got ${JSON.stringify(limit)}`);
+
+const counterOk = await page.evaluate(
+  () => document.getElementById("storyCount").textContent.trim()
+        === `${document.getElementById("story").value.length} / ${STATUS.max_story_chars}`);
+check("limit: the counter is measured against it", counterOk,
+      await page.textContent("#storyCount"));
+
+// Computed in the page so the thousands separator follows the browser's locale
+// rather than this script's.
+const placeholderOk = await page.evaluate(
+  () => document.getElementById("story").placeholder
+          .includes(STATUS.max_story_chars.toLocaleString()));
+check("limit: the placeholder quotes it too", placeholderOk,
+      await page.getAttribute("#story", "placeholder"));
+
+const overOk = await page.evaluate(() => {
+  const el = document.getElementById("story");
+  const before = el.value;
+  el.value = "x".repeat(STATUS.max_story_chars + 1);
+  updateStoryCount();
+  const over = document.getElementById("storyCount").classList.contains("over");
+  el.value = before;
+  updateStoryCount();
+  return over;
+});
+check("limit: one character past it reads as over", overOk);
+
 // ---------------------------------------------------------------- cancels
 for (const [id, label] of [["cancelSegmentBtn", "segment"],
                            ["cancelNarrBtn", "narration"]]) {
