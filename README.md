@@ -393,6 +393,23 @@ records the anchors it actually used as `slug@version` tokens, so:
   the URL are two halves of one token -- advertising v2 while still holding v1's
   picture would condition every scene on the old face while recording the new.
 
+**A scene waits for its own characters, not for everybody's.** A scene submitted
+before its portraits exist renders the wrong face and bills for it, so the wait
+is real -- but it used to be all-or-nothing: every portrait finished before any
+scene started. That is the right guarantee stated too broadly: a landscape scene
+with nobody in it queued behind every portrait it never references. Each scene
+now waits for exactly the characters it names, and scenes that name nobody start
+immediately.
+
+How much that buys depends entirely on the story. On a measured 14-scene run
+with four characters, three portraits finished within five seconds of each other
+and the fourth took 26 seconds longer -- and that fourth was the narrator, who
+appears in 12 of the 14 scenes. Twelve scenes waited for it either way, and only
+two were released early. Per-scene gating pays off for a distributed cast; for a
+story with a protagonist in every scene it is close to a no-op. The waiting is done by the run's own thread
+rather than inside a worker, because a worker blocking on another worker could
+deadlock the pool it is holding a slot in.
+
 Engines without a reference sibling (`custom`) cannot do this; the mode turns
 itself off and the API refuses to turn it back on rather than silently ignoring
 it. Turn it off deliberately with the checkbox on step 2.
@@ -509,7 +526,20 @@ constant in `config.py` — raise any of them back if the quality is not there.
 Effort must be one of `CLAUDE_EFFORTS`, checked before the call so a typo is a
 sentence rather than an opaque 400 the next time somebody renders.
 
-**Where the wall-clock goes.** Assembly is the slowest local step, so the preset
+**Rendering is Renderful's clock, not ours.** Measured on a real 14-scene run at
+1K: an image takes about **131 seconds**, and the worker pool sat pegged at its
+full width for the entire job. Nothing on this side makes an image faster -- the
+pool only decides how many 131-second waits happen at once, so a batch costs
+`ceil(scenes / WORKERS)` rounds and the round count moves in steps. That run took
+6.6 minutes at five workers; three would have been five rounds and about eleven
+minutes, seven is two rounds and about four and a half.
+
+Which is worth knowing before optimising anything here: the poll-first fix saves
+five seconds per image against a 131-second wait, and every other client-side
+change is smaller still. `WORKERS` and the number of images are the only two
+things that move this phase.
+
+**Where the wall-clock goes locally.** Assembly is the slowest local step, so the preset
 was chosen by measurement rather than taste. Each candidate was scored against a
 *lossless* encode of the same filter output, averaged over two real renders on an
 8-core box with ffmpeg 9.0:
@@ -716,8 +746,13 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 292 offline tests, free
+    .venv\Scripts\python -m pytest             # 298 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
+
+There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium
+and is the only thing here that can prove a textarea keeps its text, its focus
+and its caret while the page redraws underneath it. It needs a Node toolchain,
+so it stays out of `pytest` -- see `tests/browser/README.md`.
 
 The offline suite drives the real FastAPI app against a fake Renderful HTTP
 server on loopback and a fake Anthropic client, so the retry ladder, poll loop,

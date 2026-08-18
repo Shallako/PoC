@@ -1,0 +1,13 @@
+{
+  "name": "shoulico-browser-check",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Drives the wizard in a real browser. The Python suite proves the API; this proves the page.",
+  "type": "module",
+  "scripts": {
+    "check": "node check.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.62.1"
+  }
+}

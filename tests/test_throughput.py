@@ -161,13 +161,16 @@ def test_the_pool_is_wide_enough_to_be_worth_it():
     assert config.WORKERS >= 4, "three workers is four rounds for a 12-scene story"
 
 
-def test_a_batch_actually_runs_that_many_at_once(client, claude, api):
+def test_a_batch_actually_runs_the_whole_pool_at_once(client, claude, api):
+    """Sized off WORKERS rather than a literal: a six-scene batch cannot show a
+    seven-wide pool, so a test with a hardcoded count quietly stops proving
+    anything the moment the dial moves."""
     api.polls_before_complete = 3          # hold them open long enough to overlap
-    pid = segmented(client, scenes=6)
+    pid = segmented(client, scenes=config.WORKERS + 1)
     assert client.post(f"/api/projects/{pid}/render",
                        json={"confirm": True}).status_code == 200
     wait_for_job(pid)
 
-    assert api.peak_in_flight > 3, (
-        f"only {api.peak_in_flight} generations were ever open at once")
-    assert api.peak_in_flight <= config.WORKERS
+    assert api.peak_in_flight == config.WORKERS, (
+        f"{api.peak_in_flight} generations overlapped, not the full "
+        f"{config.WORKERS}: the pool is not being filled")

@@ -23,6 +23,24 @@ def test_status_reports_keys_without_leaking_them(client):
     assert "test-renderful-key" not in client.get("/api/status").text
 
 
+def test_the_story_limit_is_published_rather_than_repeated(client, monkeypatch):
+    """The page draws its counter and its placeholder from this number.
+
+    It used to carry its own copy in four places, so raising the limit produced
+    a server that accepted the story and a counter that turned red on it. The
+    browser check asserts the other half -- that the page actually reads this.
+    """
+    assert client.get("/api/status").json()["max_story_chars"] == config.MAX_STORY_CHARS
+
+    monkeypatch.setattr(config, "MAX_STORY_CHARS", 1234)
+    body = client.get("/api/status").json()
+    assert body["max_story_chars"] == 1234, "the endpoint must follow the config"
+
+    # And the limit it publishes is the one it actually enforces.
+    r = client.post("/api/projects", json={"name": "Too long", "story": "x" * 1235})
+    assert r.status_code == 400 and "1234" in r.json()["detail"]
+
+
 def test_malformed_anthropic_key_is_flagged_not_shown_green(client, monkeypatch):
     monkeypatch.setattr(config, "anthropic_key", lambda: "4f896804-8a6c-42a6")
     keys = client.get("/api/status").json()["keys"]

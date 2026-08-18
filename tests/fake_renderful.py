@@ -99,6 +99,10 @@ class FakeRenderful:
         # Observed concurrency: how many generations were open at once.
         self.in_flight = 0
         self.peak_in_flight = 0
+        # ("submit" | "done", prompt), in order. Peak concurrency cannot answer
+        # "did this start before that finished"; the ordering can. The fake stays
+        # ignorant of what a prompt means -- the test classifies it.
+        self.timeline: list[tuple[str, str]] = []
 
         self._seq = 0
         self._generations: dict[str, dict] = {}
@@ -175,6 +179,7 @@ class FakeRenderful:
         if gid not in self._closed:
             self._closed.add(gid)
             self.in_flight -= 1
+            self.timeline.append(("done", self._generations[gid].get("prompt", "")))
 
     def handle_submit(self, payload: dict, auth: str) -> tuple[int, dict]:
         with self.lock:
@@ -190,6 +195,7 @@ class FakeRenderful:
             self._generations[gid] = {"polls": 0, "prompt": payload.get("prompt", ""),
                                       "type": gen_type}
             self._open(gid)
+            self.timeline.append(("submit", payload.get("prompt", "")))
             cost = self.audio_cost if gen_type == AUDIO_TYPE else self.cost
             return 200, {"id": gid, "status": "queued", "cost": cost}
 
