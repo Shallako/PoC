@@ -389,6 +389,56 @@ from Opus to Sonnet, and how many tokens it thought with. Effort is billed at th
 output rate, so `output_tokens` is the number that moves when one of the effort
 constants in `config.py` changes.
 
+**The style direction is read before anything is spent.** The style direction on
+step 1 is the highest-leverage text in the app and the easiest to get wrong.
+Claude folds it into the shared style block, and that block is appended to every
+scene prompt *and* every character portrait — so a phrase the image service
+refuses there does not spoil one picture, it fails the entire batch, and the
+whole batch is billed. That is not hypothetical: this repo's own `mv-boston`
+went four rounds of sixteen-of-sixteen refused, **$2.88 for no images**, on a
+direction ending
+
+    ..., no pants or jacket, summer outfits
+
+`story_chars` is 4327 in the activity log for all four failures and for the two
+runs that later worked, so the story was never the problem. Two things about that
+phrase generalise. "no pants" is a *negative wardrobe instruction*: it was written
+to mean summer clothes and reads as an instruction to undress somebody. And a
+cast with no age stated anywhere leaves the classifier to guess, which it does
+cautiously. Neither half is reliably refused alone; together they are the most
+refused pattern in image generation there is.
+
+So the box screens itself as you type, and Segment stops once before spending
+anything:
+
+    This style direction may be refused by the image service
+    ┌──────────────────────────────────────────────────────────────┐
+    │ This asks for clothing to be removed or absent ( no pants ). │
+    │ Read literally — which is how a classifier reads it — that   │
+    │ is a request for an undressed subject.                       │
+    │ Say what they are wearing, not what they are not. "no pants" │
+    │ reads as an instruction to undress somebody; "khaki shorts   │
+    │ and canvas sneakers" gets you the same summer picture and    │
+    │ passes.                                                      │
+    └──────────────────────────────────────────────────────────────┘
+    This text is appended to every scene prompt and every character
+    portrait, so a refusal fails the whole batch — about $1.08.
+
+Every finding names what it matched and what to write instead, because a warning
+with no way forward is a wall. The rules are in `screening.py`: minors by word or
+by age, wardrobe described by its absence, the two together, graphic injury, the
+likeness of a real person, trademarked characters, and — as a note rather than a
+warning — telling the engine what *not* to draw, which these models are bad at.
+Suppressing text is the one negation exempted, because it works and this app's
+own prompts rely on it.
+
+It is a heuristic, not the service's own classifier, so it **never blocks**: the
+first press of Segment stops and explains, the second goes ahead, and editing the
+text re-arms it. `POST /api/screen` is the same check, free and attached to no
+project. Half of `tests/test_screening.py` is phrases that must *not* trip it —
+a check that cries wolf on ordinary art direction gets ignored, and then it is
+worse than nothing.
+
 **Why a prompt failed, said once.** A run that is refused is usually refused
 whole: one story that breaks a content rule breaks it in every scene built from
 it. Fourteen identical rows saying `HTTP 451` is fourteen copies of one problem,
@@ -842,7 +892,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 339 offline tests, free
+    .venv\Scripts\python -m pytest             # 363 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium

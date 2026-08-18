@@ -14,8 +14,8 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from . import (activity, captions, compiler, config, engines, i18n,
-               narration as narration_mod, orchestrator, security, store,
-               timeline, video)
+               narration as narration_mod, orchestrator, screening, security,
+               store, timeline, video)
 
 # Done at import rather than in run.py: uvicorn --reload runs the app in a child
 # process that imports this module directly and never executes run.py, so a
@@ -39,6 +39,10 @@ class NewProject(BaseModel):
     story: str = ""
     scene_count: int = config.DEFAULT_SCENE_COUNT
     engine: str | None = None
+
+
+class ScreenRequest(BaseModel):
+    text: str = ""
 
 
 class ScenePatch(BaseModel):
@@ -318,6 +322,23 @@ def api_status() -> dict:
 @app.get("/api/engines")
 def api_engines() -> dict:
     return engines.public_registry()
+
+
+@app.post("/api/screen")
+def api_screen(body: ScreenRequest) -> dict:
+    """Read a style direction the way an image engine's classifier will.
+
+    Deliberately free, stateless and attached to no project: it runs before the
+    story is sent to Claude, which is the last point at which finding a problem
+    costs nothing. Everything after it -- segmentation, then every scene prompt
+    and every character portrait carrying the same style block -- is billed.
+
+    It answers only for the text it is given. It is a heuristic, not the real
+    classifier, so nothing it returns blocks anything: see screening.py.
+    """
+    text = security.clean(body.text, security.LIMIT_STYLE)
+    findings = screening.screen(text)
+    return {"findings": findings, "worst": screening.worst(findings)}
 
 
 # --------------------------------------------------------------------------- #

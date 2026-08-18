@@ -40,9 +40,16 @@ await page.waitForFunction(
   () => typeof P !== "undefined" && P && P.id, null, { timeout: 15000 });
 
 // Load the seeded project rather than whatever happened to be first.
+//
+// Waiting on P.id alone is not enough and was intermittently wrong: boot opens
+// the first project in the list, which is often this one, so P.id matches
+// before the reload this selectOption just triggered has finished -- and that
+// reload then refills the form over whatever the check typed. LOAD_SETTLED is
+// what says no load is still in flight.
 await page.selectOption("#projectPicker", projectId);
 await page.waitForFunction(
-  (id) => typeof P !== "undefined" && P && P.id === id, projectId,
+  (id) => typeof P !== "undefined" && P && P.id === id
+          && LOAD_SETTLED === LOAD_SEQ, projectId,
   { timeout: 15000 });
 
 // ---------------------------------------------------------------- step 1
@@ -128,6 +135,60 @@ const overOk = await page.evaluate(() => {
   return over;
 });
 check("limit: one character past it reads as over", overOk);
+
+// ------------------------------------------------------- style direction check
+// The Python suite proves the rules and the endpoint. What it cannot prove is
+// that the warning reaches the screen, that it clears when the text is fixed,
+// and that Segment stops once and then goes ahead -- which is the whole
+// behaviour this feature is.
+await page.evaluate(() => goStep(1));
+
+const styleBox = page.locator("#styleScreen");
+await page.fill("#styleHint", "no pants or jacket, summer outfits");
+await page.locator("#styleHint").blur();
+await styleBox.locator(".warn").first().waitFor({ state: "visible", timeout: 8000 });
+
+const shown = await styleBox.innerText();
+check("style: the refusal risk is shown under the field",
+      /no pants/.test(shown), shown.slice(0, 90));
+check("style: it says what to write instead",
+      /what they are wearing/i.test(shown));
+check("style: the matched words are marked",
+      (await styleBox.locator(".hit").count()) > 0);
+
+// Segment must stop the first time and go ahead the second.
+const gate = await page.evaluate(async () => {
+  await screenStyle();
+  const before = SCREEN.acknowledged;
+  $("segmentBtn").click();
+  await new Promise((r) => setTimeout(r, 300));
+  return { before, after: SCREEN.acknowledged,
+           alert: document.getElementById("alerts").innerText };
+});
+check("style: the first Segment press stops and explains",
+      gate.before === false && gate.after === true && /again/i.test(gate.alert),
+      JSON.stringify(gate));
+
+// Editing re-arms it: the acknowledged text is not this text.
+await page.fill("#styleHint", "no pants or jacket, summer outfits and a hat");
+check("style: editing the text re-arms the check",
+      (await page.evaluate(() => SCREEN.acknowledged)) === false);
+
+// And the advice actually clears it.
+await page.fill("#styleHint",
+                "khaki shorts and canvas sneakers, two men in their twenties");
+await page.locator("#styleHint").blur();
+await page.waitForFunction(
+  () => document.getElementById("styleScreen").innerHTML === "", null,
+  { timeout: 8000 });
+check("style: following the advice clears the warning", true);
+
+// A clean hint must never have said anything in the first place.
+await page.fill("#styleHint", "bold anime linework, cel-shaded, summer 1992");
+await page.locator("#styleHint").blur();
+await page.waitForTimeout(600);
+check("style: ordinary art direction is not flagged",
+      (await styleBox.innerHTML()) === "");
 
 // ---------------------------------------------------------------- cancels
 for (const [id, label] of [["cancelSegmentBtn", "segment"],
