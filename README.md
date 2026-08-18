@@ -389,9 +389,50 @@ from Opus to Sonnet, and how many tokens it thought with. Effort is billed at th
 output rate, so `output_tokens` is the number that moves when one of the effort
 constants in `config.py` changes.
 
-Nothing of the story goes in. Prompts and narration lines are recorded as a
+**Why a prompt failed, said once.** A run that is refused is usually refused
+whole: one story that breaks a content rule breaks it in every scene built from
+it. Fourteen identical rows saying `HTTP 451` is fourteen copies of one problem,
+so the ledger says it once.
+
+Every failed attempt still gets its own row -- it was billed, so it is counted --
+and every row carries a `reason` slug (`content-policy`, `out-of-credit`,
+`bad-key`, `rate-limited`, `engine-failed`, `timed-out`, `stopped`,
+`bad-request`, `network`) to group the money by cause. But only the **first** row
+of each distinct (reason, kind) in a run carries the explanation; the rest carry
+`repeat: N` and nothing else. The same block is printed to stdout exactly once:
+
+    11:43:02  anchor, the-cousin content-policy: Prompt references minors.
+    11:43:02      The service judged the words, not the picture, so sending the same
+                  text again fails again and bills again. What to edit: this
+                  character's description on step 2. A reference portrait is built
+                  from the description alone -- no scene text reaches it.
+    11:43:02      sent: A broad man of thirty-one in a red baseball cap ...
+
+`reason` and `kind` are both in the key because the fix depends on both. A scene
+prompt is the scene body, the shared style block and the descriptions of the
+characters it names, concatenated; a character portrait is the description
+alone. Telling somebody to edit a scene when the offending words are in a cast
+description wastes the next render too. `render.finished` rolls the same thing up
+per run:
+
+    "failures": [
+      {"reason":"content-policy","kind":"image","count":12,"scenes":[1..12],"hint":"..."},
+      {"reason":"content-policy","kind":"anchor","count":2,
+       "characters":["the-cousin","the-narrator"],"hint":"..."}
+    ]
+
+**What of the story goes in.** Prompts and narration lines are recorded as a
 SHA-256 fingerprint -- enough to correlate two rows or match one to the manifest,
 useless to anyone who picks up the file. Keys and asset URLs are never written.
+
+There is one deliberate exception: on a **content rejection** the prompt itself
+is written, once, on that first explaining row. A hash tells you two rows match;
+it cannot tell you which words to change, and on a 451 that is the entire
+question -- "edit something in one of three places" is not a diagnosis. Set
+`LOG_REJECTED_PROMPTS = False` in `config.py` to keep story text out of the file
+completely, at the cost of having to guess; `LOG_PROMPT_CHARS` bounds how much is
+kept.
+
 The file lives inside the project directory, so deleting a project deletes its
 ledger with it, and it rotates at 1 MB keeping three older files.
 
@@ -801,7 +842,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 327 offline tests, free
+    .venv\Scripts\python -m pytest             # 339 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium

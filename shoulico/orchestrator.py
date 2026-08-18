@@ -384,6 +384,7 @@ def _run_totals(job: "Job") -> dict:
     for row in rows:
         key = row.get("outcome", "?")
         outcomes[key] = outcomes.get(key, 0) + 1
+    activity.forget(job.run_id)
     return {
         "attempts": len(rows),
         "by_outcome": outcomes,
@@ -392,7 +393,46 @@ def _run_totals(job: "Job") -> dict:
         "seconds": _elapsed(job),
         "cancelled": job.stop.is_set(),
         "fatal": job.fatal,
+        "failures": _failures(rows),
     }
+
+
+def _failures(rows: list[dict]) -> list[dict]:
+    """One entry per distinct cause, not per attempt.
+
+    Twelve scenes refused for one reason is one problem, and this is the line
+    somebody actually reads when they want to know what went wrong. The
+    per-attempt rows are all still there; this does not replace them, it makes
+    them unnecessary to read.
+
+    Grouped by (reason, kind) rather than by reason alone, because the advice
+    differs: a portrait is built from a character description and a scene from
+    three concatenated texts, so collapsing both into one entry would hand out
+    the wrong fix for whichever kind happened to fail first.
+    """
+    grouped: dict[tuple, dict] = {}
+    for row in rows:
+        if row.get("outcome") == activity.OK:
+            continue
+        reason = row.get("reason") or row.get("outcome") or "unknown"
+        key = (reason, row.get("kind"))
+        entry = grouped.setdefault(key, {"reason": reason, "kind": row.get("kind"),
+                                         "count": 0, "scenes": [], "characters": []})
+        entry["count"] += 1
+        if row.get("scene") is not None:
+            entry["scenes"].append(row["scene"])
+        if row.get("character"):
+            entry["characters"].append(row["character"])
+        # Only the first row of a cause carries the explanation; the repeats
+        # were deliberately left bare.
+        for field in ("detail", "hint"):
+            if row.get(field) and field not in entry:
+                entry[field] = row[field]
+    for entry in grouped.values():
+        entry["scenes"].sort()
+        for empty in [k for k in ("scenes", "characters") if not entry[k]]:
+            del entry[empty]
+    return sorted(grouped.values(), key=lambda e: -e["count"])
 
 
 def _elapsed(job: "Job") -> float | None:
@@ -449,7 +489,7 @@ def _render_anchor(job: Job, slug: str, key: str, model: str, params: dict) -> N
     # Opened before the first billable call and closed however this ends, so a
     # portrait that was paid for and never arrived is on the record too.
     with activity.attempt(
-            pid, "anchor", run_id=job.run_id, character=slug,
+            pid, "anchor", prompt=prompt, run_id=job.run_id, character=slug,
             engine=project.get("engine"), model=model,
             gen_type=renderful.GEN_TYPE_IMAGE, version=version,
             estimate=job.unit_price, prompt_sha256=activity.digest(prompt)) as att:
@@ -567,7 +607,8 @@ def _render_one(job: Job, project_snapshot: dict, scene_n: int, key: str,
     _set_scene(pid, scene_n, status="rendering", detail="submitting", version=version)
 
     with activity.attempt(
-            pid, "image", run_id=job.run_id, scene=scene_n, slug=scene["slug"],
+            pid, "image", prompt=prompt, run_id=job.run_id, scene=scene_n,
+            slug=scene["slug"],
             engine=project.get("engine"), model=send_model, gen_type=gen_type,
             version=version, seed=params.get("seed"), estimate=job.unit_price,
             references=len(urls), reference_tokens=list(used_tokens),
@@ -898,7 +939,8 @@ def _speak_one(job: Job, scene_n: int, key: str, voice_key: str, model: str,
     _set_scene(pid, scene_n, audio_status="speaking", audio_detail="submitting")
 
     with activity.attempt(
-            pid, "speech", run_id=job.run_id, scene=scene_n, slug=scene["slug"],
+            pid, "speech", prompt=text, run_id=job.run_id, scene=scene_n,
+            slug=scene["slug"],
             engine=voice_key, model=model,
             gen_type=renderful.GEN_TYPE_AUDIO, chars=len(text),
             estimate=job.estimates.get(scene_n),

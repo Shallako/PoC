@@ -504,3 +504,190 @@ def test_the_ledger_rotates_instead_of_growing_without_end(client, claude,
     assert "activity.jsonl" in rolled
     assert len(rolled) <= activity.KEEP + 1
     assert activity.file_for(pid).stat().st_size < 4 * activity.MAX_BYTES
+
+
+# --------------------------------------------------------------------- #
+# Saying why, once
+#
+# Fourteen scenes refused for one reason is one problem. What used to happen
+# was fourteen identical rows and no explanation on any of them.
+# --------------------------------------------------------------------- #
+
+REFUSED = {"message": "Prompt references minors. Content involving minors is not allowed."}
+
+
+def refused(client, api, scenes=12, consistency="cast"):
+    pid = segmented(client, scenes=scenes, consistency=consistency)
+    api.submit_error = (451, REFUSED)
+    render(client, pid)
+    wait_for_job(pid)
+    return pid
+
+
+def test_a_whole_run_refused_for_one_reason_is_explained_once(client, claude, api):
+    pid = refused(client, api)
+    rows = [r for r in attempts(pid) if r["kind"] in ("image", "anchor")]
+    assert len(rows) == 14                      # every one still billed, every one recorded
+
+    # One explanation per (cause, kind), because a portrait and a scene need
+    # different edits -- and nothing beyond that.
+    explained = [r for r in rows if "hint" in r]
+    assert len(explained) == 2
+    assert {r["kind"] for r in explained} == {"image", "anchor"}
+
+    # The other twelve say what they were and count themselves, nothing more.
+    repeats = [r for r in rows if "hint" not in r]
+    assert len(repeats) == 12
+    assert all(r["reason"] == activity.CONTENT_POLICY for r in repeats)
+    assert all(r["repeat"] >= 2 for r in repeats)
+    assert all("prompt" not in r for r in repeats)
+
+
+def test_the_advice_points_at_the_text_that_actually_failed(client, claude, api):
+    pid = refused(client, api)
+    by_kind = {r["kind"]: r for r in attempts(pid) if "hint" in r}
+
+    # An anchor is built from a character description alone; no scene reaches it.
+    assert "character's description" in by_kind["anchor"]["hint"]
+    assert "step 2" in by_kind["anchor"]["hint"]
+    # A scene is three texts concatenated, and any of them could be the problem.
+    assert "style block" in by_kind["image"]["hint"]
+    assert "characters it names" in by_kind["image"]["hint"]
+    # And the part that stops the next render from costing the same again.
+    for row in by_kind.values():
+        assert "fails again and bills again" in row["hint"]
+        assert row["detail"] == REFUSED["message"]        # theirs, without HTTP noise
+
+
+def test_the_rejected_text_is_written_down_because_the_text_is_the_bug(
+        client, claude, api):
+    """The one exception to hashing everything. A fingerprint tells you two rows
+    match; it cannot tell you which words to change, and on a content rejection
+    that is the whole question."""
+    pid = refused(client, api, scenes=2)
+    first = next(r for r in attempts(pid) if r["kind"] == "image" and "hint" in r)
+    assert "prompt" in first
+    assert first["prompt_sha256"] == activity.digest(first["prompt"])
+
+
+def test_only_a_content_rejection_writes_the_text_down(client, claude, api):
+    """A 5xx or a dead download says nothing about the wording, so the story
+    stays out of the file for every failure except the one it explains."""
+    pid = segmented(client, scenes=1)
+    api.download_status = 404
+    render(client, pid)
+    wait_for_job(pid)
+
+    row = attempts(pid, kind="image")[0]
+    assert row["outcome"] == activity.FAILED and "prompt" not in row
+    assert "porch at dusk" not in activity.file_for(pid).read_text(encoding="utf-8")
+
+
+def test_the_text_capture_can_be_turned_off(client, claude, api, monkeypatch):
+    monkeypatch.setattr(config, "LOG_REJECTED_PROMPTS", False)
+    pid = refused(client, api, scenes=2)
+
+    assert all("prompt" not in r for r in attempts(pid))
+    assert "porch at dusk" not in activity.file_for(pid).read_text(encoding="utf-8")
+    # The diagnosis survives; only the evidence is withheld.
+    assert any("hint" in r for r in attempts(pid))
+
+
+def test_the_captured_text_is_bounded(client, claude, api, monkeypatch):
+    monkeypatch.setattr(config, "LOG_PROMPT_CHARS", 40)
+    pid = refused(client, api, scenes=2)
+    first = next(r for r in attempts(pid) if r.get("prompt"))
+    assert len(first["prompt"]) == 40
+
+
+def test_a_second_run_explains_itself_again(client, claude, api):
+    """Dedup is per run. Silencing a reason forever would mean the same problem
+    tomorrow arrived as a count with no cause."""
+    pid = refused(client, api, scenes=2, consistency="off")
+    render(client, pid, force=True)
+    wait_for_job(pid)
+
+    by_run: dict[str, int] = {}
+    for row in attempts(pid, kind="image"):
+        if "hint" in row:
+            by_run[row["run_id"]] = by_run.get(row["run_id"], 0) + 1
+    assert len(by_run) == 2 and set(by_run.values()) == {1}
+
+
+# --------------------------------------------------------------------- #
+# The run summary, and stdout
+# --------------------------------------------------------------------- #
+
+def test_the_run_summary_groups_the_failures_by_cause(client, claude, api):
+    pid = refused(client, api)
+    closing = lines(pid, event="render.finished")[-1]
+
+    assert closing["by_outcome"] == {activity.REJECTED: 14}
+    assert closing["wasted"] == closing["billed"] == round(0.09 * 14, 4)
+
+    failures = {f["kind"]: f for f in closing["failures"]}
+    assert set(failures) == {"image", "anchor"}
+    assert failures["image"]["count"] == 12
+    assert failures["image"]["scenes"] == list(range(1, 13))
+    assert failures["anchor"]["count"] == 2
+    assert sorted(failures["anchor"]["characters"]) == ["the-cousin", "the-narrator"]
+    # Each group carries its own advice rather than whichever arrived first.
+    assert "character's description" in failures["anchor"]["hint"]
+    assert "style block" in failures["image"]["hint"]
+
+
+def test_the_failure_reaches_standard_out(client, claude, api, capsys):
+    pid = refused(client, api, scenes=3)
+    printed = capsys.readouterr().out
+
+    assert "content-policy" in printed
+    assert REFUSED["message"] in printed
+    assert "fails again and bills again" in printed
+    assert "sent:" in printed                       # the text, so it can be read
+    # Once per cause and kind, not once per scene.
+    assert printed.count("content-policy") == 2
+
+
+def test_a_success_says_nothing_at_all(client, claude, api, capsys):
+    """A log nobody can ignore is a log that stays quiet when things work."""
+    pid = segmented(client, scenes=2)
+    render(client, pid)
+    wait_for_job(pid)
+
+    printed = capsys.readouterr().out
+    assert printed.strip() == "", printed
+
+
+# --------------------------------------------------------------------- #
+# Classification
+# --------------------------------------------------------------------- #
+
+def test_each_failure_gets_a_reason_worth_grouping_by(client, claude, api):
+    cases = [
+        ((402, {"message": "credit limit reached"}), activity.OUT_OF_CREDIT),
+        ((401, {"message": "invalid api key"}), activity.BAD_KEY),
+        ((400, {"message": "unknown parameter"}), activity.BAD_REQUEST),
+    ]
+    for error, expected in cases:
+        pid = segmented(client, scenes=1)
+        api.submit_error = error
+        render(client, pid)
+        wait_for_job(pid)
+        assert attempts(pid, kind="image")[0]["reason"] == expected, expected
+
+
+def test_an_engine_failure_and_a_cancel_are_not_the_same_reason(client, claude, api):
+    pid = segmented(client, scenes=1)
+    api.fail_all_generations = True
+    render(client, pid)
+    wait_for_job(pid)
+    assert attempts(pid, kind="image")[0]["reason"] == activity.ENGINE_FAILED
+
+    other = segmented(client, scenes=3)
+    api.fail_all_generations = False
+    api.polls_before_complete = 50
+    render(client, other)
+    client.post(f"/api/projects/{other}/cancel")
+    wait_for_job(other)
+    reasons = {r.get("reason") for r in attempts(other, kind="image")}
+    assert activity.STOPPED in reasons

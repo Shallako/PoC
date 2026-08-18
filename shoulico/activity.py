@@ -42,8 +42,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+import re
 import secrets
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -51,6 +54,8 @@ from pathlib import Path
 
 from . import config
 from .security import project_id
+
+log = logging.getLogger("shoulico.activity")
 
 FILE_NAME = "activity.jsonl"
 
@@ -84,6 +89,194 @@ DOWNLOAD = "download"
 SAVE = "save"
 
 _ORDER = {SUBMIT: 0, POLL: 1, DOWNLOAD: 2, SAVE: 3}
+
+# --------------------------------------------------------------------------- #
+# Why it failed, in terms of something the user can change
+#
+# "HTTP 451: Prompt references minors" tells you a rule was broken. It does not
+# tell you which of the three texts that get concatenated into a prompt broke
+# it, nor that re-rendering it unchanged will fail again for the same money.
+# That second half is the whole difference between a log and a diagnosis.
+# --------------------------------------------------------------------------- #
+
+CONTENT_POLICY = "content-policy"
+OUT_OF_CREDIT = "out-of-credit"
+BAD_KEY = "bad-key"
+RATE_LIMITED = "rate-limited"
+TIMED_OUT = "timed-out"
+STOPPED = "stopped"
+BAD_REQUEST = "bad-request"
+ENGINE_FAILED = "engine-failed"
+NETWORK = "network"
+UNKNOWN = "unknown"
+
+# Where each kind of prompt actually comes from. A rejection on a character
+# portrait and a rejection on a scene need different edits, and sending someone
+# to the scene body when the offending words are in a cast description wastes
+# the next render too.
+_SOURCE = {
+    "anchor": ("this character's description on step 2. A reference portrait is "
+               "built from the description alone -- no scene text reaches it"),
+    "image": ("this scene's prompt body, the shared style block, or the "
+              "descriptions of the characters it names. All three are "
+              "concatenated into the one string that was sent"),
+    "speech": "this scene's narration line",
+    "claude": "the story text on step 1",
+}
+
+_HINTS = {
+    CONTENT_POLICY: (
+        "The service judged the words, not the picture, so sending the same "
+        "text again fails again and bills again. What to edit: {source}."),
+    OUT_OF_CREDIT: (
+        "The account is out of credit or has hit a cap. Nothing will render "
+        "until that is topped up, which is why the run stopped instead of "
+        "retrying."),
+    BAD_KEY: (
+        "The key was refused. Check RENDERFUL_API_KEY or api_key.txt -- a key "
+        "that is present but wrong looks identical to a good one until it is "
+        "used."),
+    RATE_LIMITED: (
+        "Throttled even after backing off. Lower WORKERS in config.py if this "
+        "keeps happening: more workers means more requests in the same second."),
+    TIMED_OUT: (
+        "It was still running when we stopped waiting, so it may yet complete "
+        "and be billed. Check the account before re-rendering it."),
+    STOPPED: "You cancelled it. Anything already submitted was still billed.",
+    BAD_REQUEST: (
+        "The request was malformed for this model, usually a parameter the "
+        "engine does not accept. Check its entry in engines.json."),
+    ENGINE_FAILED: (
+        "It was accepted and then failed on their side, so it was billed. "
+        "Retrying sometimes works; a prompt that fails twice will not start "
+        "working on the third."),
+    NETWORK: (
+        "It never reached the service, so nothing was billed. Check the "
+        "connection and try again."),
+    UNKNOWN: "",
+}
+
+_HTTP_PREFIX = re.compile(r"^HTTP \d{3}: ")
+
+
+def _reason_of(error, outcome: str) -> str:
+    from . import renderful
+    status = getattr(error, "status", None)
+    text = str(error).lower()
+    if getattr(error, "aborted", False) or outcome == CANCELLED:
+        return STOPPED
+    if getattr(error, "timed_out", False) or outcome == TIMEOUT:
+        return TIMED_OUT
+    if status == 451 or "not allowed" in text or "policy" in text:
+        return CONTENT_POLICY
+    if status == 402 or "limit reached" in text:
+        return OUT_OF_CREDIT
+    if status in (401, 403):
+        return BAD_KEY
+    if status == 429:
+        return RATE_LIMITED
+    if status == 400:
+        return BAD_REQUEST
+    if "generation failed" in text:
+        return ENGINE_FAILED
+    if isinstance(error, renderful.FatalAPIError):
+        return OUT_OF_CREDIT
+    if "urlerror" in type(error).__name__.lower() or "connection" in text:
+        return NETWORK
+    return UNKNOWN
+
+
+def explain(error, kind: str = "", outcome: str = FAILED) -> dict:
+    """{reason, detail, hint} -- a slug to group by, their sentence, and ours."""
+    reason = _reason_of(error, outcome)
+    detail = _HTTP_PREFIX.sub("", str(error)).strip()
+    hint = _HINTS.get(reason, "")
+    if hint and "{source}" in hint:
+        hint = hint.format(source=_SOURCE.get(kind, "the text that was sent"))
+    return {"reason": reason, "detail": detail, "hint": hint}
+
+
+# --------------------------------------------------------------------------- #
+# Saying it once
+#
+# Sixteen scenes rejected for one reason is one problem, not sixteen. The money
+# still needs sixteen rows, because it was billed sixteen times -- but the
+# paragraph explaining it belongs on the first of them and on stdout once.
+# --------------------------------------------------------------------------- #
+
+_seen: dict[tuple, int] = {}
+_seen_guard = threading.Lock()
+
+
+def _nth(run_id, reason: str, kind: str, detail: str) -> int:
+    """How many times this exact failure has been seen in this run; 1 is first.
+
+    Deduplicated only *within* a run. An attempt outside one is a single call
+    that cannot repeat itself, and remembering it forever would silence the same
+    problem happening again tomorrow.
+
+    `kind` is part of the key because the advice depends on it: one rejection
+    reason arriving on a character portrait and on a scene are two different
+    edits, so each needs its own first-and-only explanation. Collapsing them
+    would leave whichever came second with a count and no reason.
+    """
+    if not run_id:
+        return 1
+    key = (run_id, reason, kind, detail)
+    with _seen_guard:
+        _seen[key] = _seen.get(key, 0) + 1
+        return _seen[key]
+
+
+def forget(run_id) -> None:
+    """Drop a finished run's dedup state so the next one starts fresh."""
+    if not run_id:
+        return
+    with _seen_guard:
+        for key in [k for k in _seen if k[0] == run_id]:
+            del _seen[key]
+
+
+class _Stdout(logging.StreamHandler):
+    """Writes to whatever sys.stdout is *now*.
+
+    StreamHandler binds its stream at construction, which is wrong for a handler
+    installed at import: anything that replaces sys.stdout afterwards -- a test
+    harness capturing output, a caller redirecting it -- gets nothing, and the
+    log keeps writing to a stream nobody is reading.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(sys.stdout)
+
+    @property
+    def stream(self):
+        return sys.stdout
+
+    @stream.setter
+    def stream(self, value) -> None:
+        pass                            # the property above is the only answer
+
+
+def install_stdout_handler() -> None:
+    """Send this package's log to stdout.
+
+    Without it `logging` falls through to its last-resort handler: stderr, and
+    only at WARNING. A failure that costs money should arrive in the same stream
+    as the banner that said where the projects live, rather than depending on
+    whether uvicorn happened to configure the root logger.
+    """
+    parent = logging.getLogger("shoulico")
+    if any(isinstance(h, _Stdout) for h in parent.handlers):
+        return
+    handler = _Stdout()
+    handler.setFormatter(logging.Formatter("%(asctime)s  %(message)s", "%H:%M:%S"))
+    parent.addHandler(handler)
+    parent.setLevel(logging.INFO)
+    # Otherwise every record prints twice the moment anything configures a root
+    # handler, which uvicorn --reload does in its child process.
+    parent.propagate = False
+
 
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
@@ -183,9 +376,11 @@ class Attempt:
     let one happen even if a future edit of the caller forgets to say so.
     """
 
-    def __init__(self, pid: str, kind: str, **fields) -> None:
+    def __init__(self, pid: str, kind: str, prompt: str = "", **fields) -> None:
         self.pid = pid
         self.kind = kind
+        # Held in memory, never written unless the text itself is what failed.
+        self.prompt = prompt
         self.fields = {k: v for k, v in fields.items() if v is not None}
         self.stage = SUBMIT
         self.generation_id: str | None = None
@@ -213,10 +408,12 @@ class Attempt:
         self.finish(OK, **fields)
 
     def failed(self, error, **fields) -> None:
-        self.finish(_outcome_of(error), error=str(error),
+        outcome = _outcome_of(error)
+        self.finish(outcome, error=str(error),
                     error_class=type(error).__name__ if isinstance(error, BaseException)
                     else None,
-                    http_status=getattr(error, "status", None), **fields)
+                    http_status=getattr(error, "status", None),
+                    _explained=explain(error, self.kind, outcome), **fields)
 
     def cancelled(self, **fields) -> None:
         self.finish(CANCELLED, **fields)
@@ -226,6 +423,9 @@ class Attempt:
             return
         self.written = True
         self.outcome = outcome
+        # Passed through `failed()`; pulled out here so the diagnosis is applied
+        # in one place whichever verdict method was called.
+        why = fields.pop("_explained", None)
         line = {
             "ts": _now(),
             "event": "attempt",
@@ -239,7 +439,44 @@ class Attempt:
         line.update(self.fields)
         line.update(self.extra)
         line.update({k: v for k, v in fields.items() if v is not None})
+        if why:
+            line["reason"] = why["reason"]
+            self._diagnose(line, why)
         _append(self.pid, {k: v for k, v in line.items() if v is not None})
+
+    def _diagnose(self, line: dict, why: dict) -> None:
+        """Say why, once.
+
+        The count is what turns sixteen rows into one problem. Every row keeps
+        its `reason` so the money can still be grouped by cause, but only the
+        first carries the explanation and the text that caused it -- and only
+        the first is printed.
+        """
+        nth = _nth(line.get("run_id"), why["reason"], self.kind, why["detail"])
+        if nth > 1:
+            line["repeat"] = nth        # nth failure of this kind in this run
+            return
+
+        line["detail"] = why["detail"]      # their sentence, without the HTTP noise
+        line["hint"] = why["hint"]          # ours
+        # The one place the raw text is written down, and only when the text is
+        # what went wrong. A hash tells you two rows match; it cannot tell you
+        # which words to change, and on a content rejection that is the entire
+        # question. Set config.LOG_REJECTED_PROMPTS = False to keep the file
+        # free of story text at the cost of having to guess.
+        if (why["reason"] == CONTENT_POLICY and config.LOG_REJECTED_PROMPTS
+                and self.prompt):
+            line["prompt"] = self.prompt[:config.LOG_PROMPT_CHARS]
+
+        where = ", ".join(
+            str(v) for v in (self.kind,
+                             f"scene {line['scene']}" if line.get("scene") else None,
+                             line.get("character")) if v)
+        log.warning("%s %s: %s", where, why["reason"], why["detail"])
+        if why["hint"]:
+            log.warning("    %s", why["hint"])
+        if line.get("prompt"):
+            log.warning("    sent: %s", line["prompt"])
 
 
 def _outcome_of(error) -> str:
@@ -263,8 +500,8 @@ def _outcome_of(error) -> str:
 
 
 @contextmanager
-def attempt(pid: str, kind: str, **fields):
-    att = Attempt(pid, kind, **fields)
+def attempt(pid: str, kind: str, prompt: str = "", **fields):
+    att = Attempt(pid, kind, prompt=prompt, **fields)
     try:
         yield att
     except BaseException as exc:                       # noqa: BLE001 - re-raised

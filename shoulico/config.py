@@ -57,6 +57,25 @@ NARRATION_EFFORT = "medium"
 TRANSLATE_MODEL = "claude-sonnet-5"
 TRANSLATE_EFFORT = "low"
 
+# --------------------------------------------------------------------------- #
+# Activity log
+#
+# The ledger fingerprints prompts rather than storing them, because a project's
+# activity.jsonl is the sort of file that ends up pasted into a bug report. The
+# one exception is a *content rejection*: there the text is what failed, a hash
+# cannot tell you which words to change, and being told "edit something in one
+# of three places" is not a diagnosis. So the rejected prompt is written down,
+# once per distinct rejection per run, and nowhere else.
+#
+# Set this False to keep story text out of the file entirely, at the cost of
+# having to guess what a 451 objected to.
+# --------------------------------------------------------------------------- #
+
+LOG_REJECTED_PROMPTS = True
+# Enough to see the sentence that broke a rule. A full compiled prompt runs to
+# several thousand characters and the offending phrase is rarely at the end.
+LOG_PROMPT_CHARS = 2000
+
 MAX_STORY_CHARS = 10000                        # FR-101
 DEFAULT_SCENE_COUNT = 12
 MAX_SCENE_COUNT = 40

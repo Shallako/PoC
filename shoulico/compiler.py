@@ -488,7 +488,7 @@ def _recorded(pid: str | None, task: str, model: str, effort: str):
         yield _Note(None)
         return
     with activity.attempt(pid, "claude", task=task, model=model,
-                          effort=effort) as att:
+                          effort=effort) as att:      # no prompt: it is the story
         note = _Note(att)
         yield note
         att.finish(note.outcome)

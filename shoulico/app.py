@@ -17,6 +17,11 @@ from . import (activity, captions, compiler, config, engines, i18n,
                narration as narration_mod, orchestrator, security, store,
                timeline, video)
 
+# Done at import rather than in run.py: uvicorn --reload runs the app in a child
+# process that imports this module directly and never executes run.py, so a
+# handler installed there would vanish exactly when it is most wanted.
+activity.install_stdout_handler()
+
 app = FastAPI(title="Shoulico (local MVP)", docs_url="/api/docs", redoc_url=None)
 
 # Outermost, so a request from somewhere it should not be is refused before any

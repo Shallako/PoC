@@ -4,9 +4,9 @@
 the obvious choices are AGPL and that matters the day this stops being a PoC.*
 
 **Status: Tier 0 is built** -- `shoulico/activity.py`, `activity.jsonl` per
-project, `GET /api/projects/<id>/activity`, 28 tests in `tests/test_activity.py`.
-Everything from §4 down is still a plan. What was built differs from §3 in two
-places, both noted in place below.
+project, `GET /api/projects/<id>/activity`, 40 tests in `tests/test_activity.py`.
+Everything from §4 down is still a plan. What was built differs from §3 in
+several places, all noted in place below.
 
 ---
 
@@ -79,6 +79,15 @@ holding a record of what somebody's story cost. And the append is done directly
 under a lock rather than through `logging`'s `RotatingFileHandler` -- a handler
 per project holds an open file handle, and `store.delete()` calls `shutil.rmtree`,
 which on Windows fails outright while a handle is open.
+
+*Added after the first real incident.* A run of 14 was refused 451 end to end --
+`$0.72`, no images -- and the ledger recorded it correctly and unreadably: 14
+identical rows, no statement of which of the three texts feeding a prompt had
+broken the rule. So an attempt is now classified into a `reason` slug, the first
+of each (reason, kind) in a run carries the explanation and the rejected text
+while the rest carry only a repeat count, and that one block also goes to stdout.
+Writing the rejected prompt is a deliberate exception to hashing everything,
+switched by `config.LOG_REJECTED_PROMPTS`; the reasoning is in the README.
 
 *Added while building it:* a `stage` field (`submit` / `poll` / `download` /
 `save`). Without it there is no way to separate "the request never reached them,
