@@ -60,7 +60,12 @@ TRANSLATE_EFFORT = "low"
 MAX_STORY_CHARS = 5000                        # FR-101
 DEFAULT_SCENE_COUNT = 12
 MAX_SCENE_COUNT = 40
-WORKERS = 3                                   # concurrent generations
+# Concurrent generations. Twelve images at three workers is four rounds; at five
+# it is three, and the wall-clock follows. Raised only once a 429 stopped being
+# fatal -- more workers means more throttles, and before that every throttle
+# killed the whole batch. Renderful publishes no concurrency limit, so this is a
+# dial: if 429s start showing up in the log, turn it back down.
+WORKERS = 5
 
 # Pre-flight duration estimates only. A live measurement replaces these the
 # moment narration audio exists: 13 words measured 4.0s against the 5.2s these

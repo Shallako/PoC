@@ -31,6 +31,16 @@ POLL_TIMEOUT = 3600
 HTTP_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 2               # multiplied by the attempt number
 
+# A 429 is a moment, not a verdict: the key is good, the account has credit, the
+# last few seconds were busy. It used to be fatal, which meant one throttle
+# stopped a twelve-image batch halfway and left the rest unrendered -- the exact
+# failure that gets more likely the more workers you run. Backing off and asking
+# again is what every other transient failure already gets.
+RATE_LIMIT_BACKOFF_SECONDS = 5
+# Ceiling on the server's own Retry-After. A worker parked for ten minutes is
+# indistinguishable from a hung run.
+RATE_LIMIT_MAX_WAIT = 60
+
 # Renderful routes on `type`; everything else in the payload is model-specific.
 GEN_TYPE_IMAGE = "text-to-image"
 GEN_TYPE_AUDIO = "text-to-audio"
@@ -77,8 +87,26 @@ def _request(url: str, key: str, payload: dict | None = None, timeout: int = 60)
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _retry_after(exc) -> float | None:
+    """The server's own answer to "how long?", when it sends one.
+
+    Only the numeric form is read. Retry-After may also be an HTTP date, and
+    guessing at clock skew to save a couple of seconds is not worth it -- the
+    backoff ladder covers that case perfectly well.
+    """
+    try:
+        raw = exc.headers.get("Retry-After")
+    except Exception:  # noqa: BLE001 - no headers, no hint, no problem
+        return None
+    try:
+        return max(0.0, min(float(raw), RATE_LIMIT_MAX_WAIT))
+    except (TypeError, ValueError):
+        return None
+
+
 def api_call(url: str, key: str, payload: dict | None = None) -> dict:
     last: Exception | None = None
+    delay: float | None = None          # None -> the default backoff ladder
     for attempt in range(1, HTTP_RETRIES + 1):
         try:
             return _request(url, key, payload)
@@ -89,15 +117,26 @@ def api_call(url: str, key: str, payload: dict | None = None) -> dict:
                 msg = parsed.get("message") or parsed.get("error") or body
             except Exception:
                 msg = body
-            if e.code in (401, 402, 403, 429) or "limit reached" in str(msg).lower():
+            # "limit reached" is the out-of-credit message, whatever status it
+            # arrives under. That is a verdict and no amount of waiting fixes it.
+            spent = "limit reached" in str(msg).lower()
+
+            if e.code == 429 and not spent:
+                if attempt == HTTP_RETRIES:
+                    raise FatalAPIError(
+                        f"HTTP 429 after {HTTP_RETRIES} attempts: {msg}") from None
+                last = RuntimeError(f"HTTP 429: {msg}")
+                delay = _retry_after(e) or RATE_LIMIT_BACKOFF_SECONDS * attempt
+            elif e.code in (401, 402, 403) or spent:
                 raise FatalAPIError(f"HTTP {e.code}: {msg}") from None
-            if 400 <= e.code < 500 and e.code != 408:
+            elif 400 <= e.code < 500 and e.code != 408:
                 raise RuntimeError(f"HTTP {e.code}: {msg}") from None
-            last = RuntimeError(f"HTTP {e.code}: {msg}")
+            else:
+                last, delay = RuntimeError(f"HTTP {e.code}: {msg}"), None
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
-            last = e
+            last, delay = e, None
         if attempt < HTTP_RETRIES:
-            time.sleep(2 * attempt)
+            time.sleep(delay if delay is not None else RETRY_BACKOFF_SECONDS * attempt)
     raise RuntimeError(f"request to {url} failed after {HTTP_RETRIES} attempts: {last}")
 
 
@@ -138,11 +177,14 @@ def submit(prompt: str, key: str, model: str, params: dict, *,
 
 def wait_for(gen_id: str, key: str, should_stop=None, on_state=None, *,
              timeout: int = POLL_TIMEOUT, interval: int = POLL_SECONDS) -> dict:
+    # Asked once before the first wait rather than after it. Sleeping first cost
+    # every generation a full interval of nothing whether or not it was already
+    # done -- five seconds an image, and a twelve-scene batch at three workers
+    # pays that four times over before a single picture can arrive.
     deadline = time.time() + timeout
-    while time.time() < deadline:
+    while True:
         if should_stop is not None and should_stop():
             raise RuntimeError("aborted")
-        time.sleep(interval)
         status = api_call(f"{RENDERFUL_API_BASE}/generations/{gen_id}", key)
         state = status.get("status")
         if state == "completed":
@@ -151,7 +193,9 @@ def wait_for(gen_id: str, key: str, should_stop=None, on_state=None, *,
             raise RuntimeError(f"generation failed: {status.get('error') or status}")
         if on_state:
             on_state(state)
-    raise RuntimeError(f"timed out after {timeout}s waiting for {gen_id}")
+        if time.time() >= deadline:
+            raise RuntimeError(f"timed out after {timeout}s waiting for {gen_id}")
+        time.sleep(interval)
 
 
 def download(url: str, timeout: int = 120) -> bytes:

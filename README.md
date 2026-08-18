@@ -429,12 +429,28 @@ already happened, it just costs ~6x the bytes (`renderful.save_delivered` takes 
 `convert_png` flag if you ever want it, and it needs Pillow).
 
 **Failure classes**, carried over from the working `generate_boston.py`:
-401/402/403/429 and "limit reached" stop the whole run -- the account is out of
-credit or throttled, and the UI says so. Other 4xx (content rejection 451,
-malformed request) fail that one scene immediately and the batch continues. 5xx and
-network errors retry three times with backoff. Polling waits up to 3600s per image;
-600 once stranded a paid render that finished later. Speech is a different animal
--- it came back in ~5s live -- so it polls every 2s up to 300s.
+401/402/403 and "limit reached" stop the whole run -- the key is bad or the
+account is out of credit, and neither improves with waiting, so the UI says so
+and stops. Other 4xx (content rejection 451, malformed request) fail that one
+scene immediately and the batch continues. 5xx and network errors retry three
+times with backoff.
+
+**A 429 is not in that list any more.** It used to be, and one throttle
+therefore stopped a twelve-image batch halfway and left the rest unrendered --
+which is the failure that gets *more* likely the more workers you run. A
+throttle is a moment, not a verdict: the key is good and the account has credit.
+It now backs off and asks again, honouring the server's own `Retry-After` where
+one is sent (capped at `RATE_LIMIT_MAX_WAIT`, because a worker parked for ten
+minutes is indistinguishable from a hung run). Only a throttle that outlasts all
+three attempts stops the run. A 429 whose body is really the out-of-credit
+message stays fatal on the first attempt, whatever status it arrives under.
+
+**Polling asks before it waits.** It used to sleep first, so every generation
+paid a full interval of nothing whether or not it had already finished -- five
+seconds an image, and a twelve-scene batch pays that once per round before a
+single picture can arrive. Polling waits up to 3600s per image; 600 once
+stranded a paid render that finished later. Speech is a different animal -- it
+came back in ~5s live -- so it polls every 2s up to 300s.
 
 ## Stopping things
 
@@ -493,7 +509,25 @@ constant in `config.py` — raise any of them back if the quality is not there.
 Effort must be one of `CLAUDE_EFFORTS`, checked before the call so a typo is a
 sentence rather than an opaque 400 the next time somebody renders.
 
-Two things that look like savings and are not. **Prompt caching** does not pay
+**Where the wall-clock goes.** Measured on an 8-core box with ffmpeg 9.0,
+encoding a real 1080p render as an 8-second scene:
+
+| | per scene | 12-scene cut |
+|---|---:|---:|
+| Ken Burns, `medium` | 7.07s | 84.9s |
+| Ken Burns, `fast` | 5.10s | 61.2s |
+| Ken Burns, `veryfast` | 2.60s | 31.2s |
+| no motion, `medium` | 3.75s | 45.0s |
+
+**Encoding scenes in parallel buys nothing** — 2, 3 and 4 workers all came in at
+1.0–1.1x, because ffmpeg already saturates every core on a single encode. It is
+the obvious optimisation and it is not one; `VIDEO_PRESET` is the lever here, and
+it is one constant. `ultrafast` is not worth it: 20% faster than `veryfast` and
+it produced a file ten times larger.
+
+Two more things that look like savings and are not. The project endpoint the
+page polls every 2.5s costs **2ms at 20 scenes**, so it is not worth touching.
+**Prompt caching** does not pay
 here: the shared prefix is the 1,529-token system prompt, call volume is low, and
 a 1.25x write premium against occasional 0.1x reads is a fraction of a cent.
 **`max_tokens`** is a ceiling, not a spend — lowering it buys nothing and risks
@@ -672,7 +706,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 277 offline tests, free
+    .venv\Scripts\python -m pytest             # 292 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 The offline suite drives the real FastAPI app against a fake Renderful HTTP
