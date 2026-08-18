@@ -509,21 +509,31 @@ constant in `config.py` — raise any of them back if the quality is not there.
 Effort must be one of `CLAUDE_EFFORTS`, checked before the call so a typo is a
 sentence rather than an opaque 400 the next time somebody renders.
 
-**Where the wall-clock goes.** Measured on an 8-core box with ffmpeg 9.0,
-encoding a real 1080p render as an 8-second scene:
+**Where the wall-clock goes.** Assembly is the slowest local step, so the preset
+was chosen by measurement rather than taste. Each candidate was scored against a
+*lossless* encode of the same filter output, averaged over two real renders on an
+8-core box with ffmpeg 9.0:
 
-| | per scene | 12-scene cut |
-|---|---:|---:|
-| Ken Burns, `medium` | 7.07s | 84.9s |
-| Ken Burns, `fast` | 5.10s | 61.2s |
-| Ken Burns, `veryfast` | 2.60s | 31.2s |
-| no motion, `medium` | 3.75s | 45.0s |
+| preset | per scene | SSIM | PSNR | file | 12-scene cut |
+|---|---:|---:|---:|---:|---:|
+| `medium` | 5.41s | 0.97928 | 44.31 dB | 2.58 MB | ~65s |
+| `fast` | 4.05s | 0.97808 | 43.89 dB | 2.58 MB | ~49s |
+| **`superfast`** (default) | **1.81s** | 0.97670 | 43.44 dB | 3.73 MB | **~22s** |
+
+Under a decibel separates them, at a level where an eye finds nothing — on the
+easiest content an encoder ever gets, a still with a slow linear zoom. `superfast`
+is 3x quicker for 45% larger files. If the disk matters more than the wait, `fast`
+is the conservative setting: 1.3x quicker at byte-identical size. Skip
+`veryfast` — it measured *worse* than `superfast` on both quality and speed, and
+`ultrafast` produced a file ten times larger.
 
 **Encoding scenes in parallel buys nothing** — 2, 3 and 4 workers all came in at
 1.0–1.1x, because ffmpeg already saturates every core on a single encode. It is
-the obvious optimisation and it is not one; `VIDEO_PRESET` is the lever here, and
-it is one constant. `ultrafast` is not worth it: 20% faster than `veryfast` and
-it produced a file ten times larger.
+the obvious optimisation and it is not one.
+
+**Rendering and speaking do not wait for each other.** They hold separate job
+slots with separate cancel buttons, and neither depends on the other's output, so
+speech can be started while pictures are still arriving. Only assembly needs both.
 
 Two more things that look like savings and are not. The project endpoint the
 page polls every 2.5s costs **2ms at 20 scenes**, so it is not worth touching.
