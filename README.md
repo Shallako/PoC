@@ -429,12 +429,28 @@ already happened, it just costs ~6x the bytes (`renderful.save_delivered` takes 
 `convert_png` flag if you ever want it, and it needs Pillow).
 
 **Failure classes**, carried over from the working `generate_boston.py`:
-401/402/403/429 and "limit reached" stop the whole run -- the account is out of
-credit or throttled, and the UI says so. Other 4xx (content rejection 451,
-malformed request) fail that one scene immediately and the batch continues. 5xx and
-network errors retry three times with backoff. Polling waits up to 3600s per image;
-600 once stranded a paid render that finished later. Speech is a different animal
--- it came back in ~5s live -- so it polls every 2s up to 300s.
+401/402/403 and "limit reached" stop the whole run -- the key is bad or the
+account is out of credit, and neither improves with waiting, so the UI says so
+and stops. Other 4xx (content rejection 451, malformed request) fail that one
+scene immediately and the batch continues. 5xx and network errors retry three
+times with backoff.
+
+**A 429 is not in that list any more.** It used to be, and one throttle
+therefore stopped a twelve-image batch halfway and left the rest unrendered --
+which is the failure that gets *more* likely the more workers you run. A
+throttle is a moment, not a verdict: the key is good and the account has credit.
+It now backs off and asks again, honouring the server's own `Retry-After` where
+one is sent (capped at `RATE_LIMIT_MAX_WAIT`, because a worker parked for ten
+minutes is indistinguishable from a hung run). Only a throttle that outlasts all
+three attempts stops the run. A 429 whose body is really the out-of-credit
+message stays fatal on the first attempt, whatever status it arrives under.
+
+**Polling asks before it waits.** It used to sleep first, so every generation
+paid a full interval of nothing whether or not it had already finished -- five
+seconds an image, and a twelve-scene batch pays that once per round before a
+single picture can arrive. Polling waits up to 3600s per image; 600 once
+stranded a paid render that finished later. Speech is a different animal -- it
+came back in ~5s live -- so it polls every 2s up to 300s.
 
 ## Stopping things
 
@@ -470,6 +486,63 @@ interface is a Claude call and can hang the same way, but it is a preference in
 the header rather than a phase of the workflow; if it becomes a problem, it
 takes the same `running_call` treatment.
 
+**What the Claude calls cost.** Three calls, three difficulties, and they no
+longer share one model and one thinking depth. Measured with `count_tokens`
+against the real prompts:
+
+| Call | Input | Visible output | Model | Effort |
+|---|---:|---:|---|---|
+| Segment | 3,107 tok (5,000-char story) | ~4,300 tok at 12 scenes | `SEGMENT_MODEL` | `high` |
+| Narration | ~2,300 tok | ~400 tok | `NARRATION_MODEL` | `medium` |
+| Translate interface | ~6,500 tok, once per language | similar | `TRANSLATE_MODEL` | `low` |
+
+Visible output runs about **350 tokens per scene** plus the shared style block,
+so scene count is the multiplier on both tokens and dollars — 20 scenes is 5,700
+output tokens *and* $1.80 of pictures. Thinking tokens are billed at the output
+rate and are not in those figures; `display` is omitted, so they cannot be
+observed from outside a live call.
+
+Segmenting keeps Opus at high effort because everything downstream rests on it:
+it reads the story, finds the beats, writes engine-targeted prompts and picks out
+the recurring cast in one pass. The other two do not need that. Each is one
+constant in `config.py` — raise any of them back if the quality is not there.
+Effort must be one of `CLAUDE_EFFORTS`, checked before the call so a typo is a
+sentence rather than an opaque 400 the next time somebody renders.
+
+**Where the wall-clock goes.** Assembly is the slowest local step, so the preset
+was chosen by measurement rather than taste. Each candidate was scored against a
+*lossless* encode of the same filter output, averaged over two real renders on an
+8-core box with ffmpeg 9.0:
+
+| preset | per scene | SSIM | PSNR | file | 12-scene cut |
+|---|---:|---:|---:|---:|---:|
+| `medium` | 5.41s | 0.97928 | 44.31 dB | 2.58 MB | ~65s |
+| `fast` | 4.05s | 0.97808 | 43.89 dB | 2.58 MB | ~49s |
+| **`superfast`** (default) | **1.81s** | 0.97670 | 43.44 dB | 3.73 MB | **~22s** |
+
+Under a decibel separates them, at a level where an eye finds nothing — on the
+easiest content an encoder ever gets, a still with a slow linear zoom. `superfast`
+is 3x quicker for 45% larger files. If the disk matters more than the wait, `fast`
+is the conservative setting: 1.3x quicker at byte-identical size. Skip
+`veryfast` — it measured *worse* than `superfast` on both quality and speed, and
+`ultrafast` produced a file ten times larger.
+
+**Encoding scenes in parallel buys nothing** — 2, 3 and 4 workers all came in at
+1.0–1.1x, because ffmpeg already saturates every core on a single encode. It is
+the obvious optimisation and it is not one.
+
+**Rendering and speaking do not wait for each other.** They hold separate job
+slots with separate cancel buttons, and neither depends on the other's output, so
+speech can be started while pictures are still arriving. Only assembly needs both.
+
+Two more things that look like savings and are not. The project endpoint the
+page polls every 2.5s costs **2ms at 20 scenes**, so it is not worth touching.
+**Prompt caching** does not pay
+here: the shared prefix is the 1,529-token system prompt, call volume is low, and
+a 1.25x write premium against occasional 0.1x reads is a fraction of a cent.
+**`max_tokens`** is a ceiling, not a spend — lowering it buys nothing and risks
+truncating a good answer, since on Opus 5 it caps thinking and text together.
+
 **When Claude is overloaded.** `overloaded_error` (HTTP 529) means Anthropic
 turned the request away before the model ran -- it is capacity on their side, it
 has nothing to do with the story, and nothing is charged for it. The SDK's own
@@ -477,7 +550,9 @@ retries are sub-second and twice, which is right for a blip and useless for a
 busy few minutes, so `compiler._call` ladders on top of them: four tries on the
 requested model at 3s, 8s and 20s, then one try on `FALLBACK_CLAUDE_MODEL`
 (`claude-sonnet-5`) as a last resort. Set that to `""` in `config.py` to fail
-instead of falling back.
+instead of falling back. A call already running on that model — narration, now —
+has no fallback tier and simply gets its four tries, which is the right answer:
+the reason to escalate is that Opus saturates first.
 
 If the fallback answers, the project records which model actually wrote the
 scenes (`claude_model`, `claude_fell_back`) and step 1 says so, because a set
@@ -641,7 +716,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 257 offline tests, free
+    .venv\Scripts\python -m pytest             # 292 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 The offline suite drives the real FastAPI app against a fake Renderful HTTP

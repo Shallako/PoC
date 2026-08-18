@@ -26,12 +26,46 @@ DEFAULT_CLAUDE_MODEL = "claude-opus-5"
 # Last resort when the model above keeps answering 529 "overloaded". Opus is the
 # first tier to saturate; Sonnet handles these schema-constrained calls well and
 # is far less likely to be turned away. Set to "" to fail instead of falling back.
+# A task already running on this model has no fallback tier, which is fine: the
+# reason to fall back is that Opus saturates first.
 FALLBACK_CLAUDE_MODEL = "claude-sonnet-5"
+
+# --------------------------------------------------------------------------- #
+# Which model, and how hard it thinks, per task
+#
+# Three calls of three different difficulties used to share one hardcoded
+# `effort: "high"` and one model. Segmenting is the hard one: it reads a story,
+# finds its beats, writes engine-targeted prompts and picks out the recurring
+# cast in a single pass, and the quality of everything downstream rests on it.
+# Writing narration is twelve short lines against beats that already exist.
+# Translating the interface is a mechanical pass over a fixed list of labels --
+# and it was being billed Opus reasoning to do it.
+#
+# Effort drives how much the model thinks, and thinking is billed at the output
+# rate, so this is the cheapest lever there is. Raise any of them back if the
+# quality is not there; each is one constant.
+# --------------------------------------------------------------------------- #
+
+CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+SEGMENT_MODEL = DEFAULT_CLAUDE_MODEL
+SEGMENT_EFFORT = "high"
+
+NARRATION_MODEL = "claude-sonnet-5"
+NARRATION_EFFORT = "medium"
+
+TRANSLATE_MODEL = "claude-sonnet-5"
+TRANSLATE_EFFORT = "low"
 
 MAX_STORY_CHARS = 5000                        # FR-101
 DEFAULT_SCENE_COUNT = 12
 MAX_SCENE_COUNT = 40
-WORKERS = 3                                   # concurrent generations
+# Concurrent generations. Twelve images at three workers is four rounds; at five
+# it is three, and the wall-clock follows. Raised only once a 429 stopped being
+# fatal -- more workers means more throttles, and before that every throttle
+# killed the whole batch. Renderful publishes no concurrency limit, so this is a
+# dial: if 429s start showing up in the log, turn it back down.
+WORKERS = 5
 
 # Pre-flight duration estimates only. A live measurement replaces these the
 # moment narration audio exists: 13 words measured 4.0s against the 5.2s these
@@ -144,7 +178,16 @@ VIDEO_KEN_BURNS_ZOOM = 1.12
 
 VIDEO_FPS = 30
 VIDEO_CRF = 20
-VIDEO_PRESET = "medium"
+# Measured, not guessed. Against a lossless encode of the same filter output,
+# across two real renders: `medium` scores SSIM 0.9793 / PSNR 44.31 dB, and
+# `superfast` scores 0.9767 / 43.44 -- under a decibel apart, which at 44 dB is
+# not something an eye finds, on the easiest content an encoder ever gets (a
+# still with a slow linear zoom). It is 3x faster, which takes a twelve-scene
+# cut from about 65 seconds to 22.
+#
+# The cost is 45% larger files. If that matters more than the wait, `fast` is
+# the conservative setting: 1.3x quicker at byte-identical size.
+VIDEO_PRESET = "superfast"
 VIDEO_AUDIO_BITRATE = "192k"
 VIDEO_AUDIO_RATE = 48000
 VIDEO_AUDIO_CHANNELS = 2

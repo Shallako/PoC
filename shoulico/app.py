@@ -301,7 +301,9 @@ def index() -> HTMLResponse:
 def api_status() -> dict:
     return {
         "keys": config.key_status(),
-        "claude_model": config.DEFAULT_CLAUDE_MODEL,
+        # The model the page names, which is the one that segments -- the call
+        # whose result the user actually reads and edits.
+        "claude_model": config.SEGMENT_MODEL,
         "max_story_chars": config.MAX_STORY_CHARS,
         "workers": config.WORKERS,
         "projects_dir": str(config.PROJECTS_DIR),
@@ -558,7 +560,7 @@ def api_segment(pid: str, body: SegmentRequest) -> dict:
         proj["prompt_language"] = prompt_lang
         # Which model actually wrote these scenes. It is the requested one unless
         # that was overloaded and the fallback answered instead.
-        proj["claude_model"] = result.get("model") or config.DEFAULT_CLAUDE_MODEL
+        proj["claude_model"] = result.get("model") or config.SEGMENT_MODEL
         proj["claude_fell_back"] = bool(result.get("fell_back"))
 
     return _decorate(store.mutate(pid, apply))

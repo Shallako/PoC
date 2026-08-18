@@ -76,6 +76,9 @@ class FakeRenderful:
         # Knobs.
         self.submit_error: tuple[int, dict] | None = None
         self.submit_flaky: list[int] = []
+        # Sent as Retry-After on any 4xx/5xx, so the client's honouring of the
+        # server's own "how long?" can be tested rather than assumed.
+        self.retry_after: str | None = None
         self.polls_before_complete = 1
         self.fail_generation: set[str] = set()
         # Fail whichever generation carries this text in its prompt. `gen-N` ids
@@ -241,7 +244,14 @@ def _handler_for(fake: FakeRenderful):
             self.wfile.write(body)
 
         def _send_json(self, code: int, doc: dict) -> None:
-            self._send(code, json.dumps(doc).encode("utf-8"), "application/json")
+            body = json.dumps(doc).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            if code >= 400 and fake.retry_after is not None:
+                self.send_header("Retry-After", str(fake.retry_after))
+            self.end_headers()
+            self.wfile.write(body)
 
         def do_POST(self) -> None:
             if self.path != "/api/v1/generations":
