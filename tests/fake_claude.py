@@ -27,6 +27,16 @@ class _StopDetails:
         self.category = category
 
 
+class _Usage:
+    """The real SDK reports tokens on the final message, and the activity ledger
+    is the first thing in the app that reads them. Derived from the text rather
+    than hardcoded, so a bigger answer costs more here too."""
+
+    def __init__(self, text: str) -> None:
+        self.input_tokens = 1200
+        self.output_tokens = max(1, len(text) // 4)
+
+
 class Reply:
     """A raw message to hand back, for the paths that aren't a happy JSON body."""
 
@@ -35,6 +45,7 @@ class Reply:
         self.content = [_Block(text)]
         self.stop_reason = stop_reason
         self.stop_details = _StopDetails(refusal_category) if refusal_category else None
+        self.usage = _Usage(text)
 
 
 class APIError(Exception):

@@ -258,6 +258,8 @@ spend money.
 projects/<project-id>/
   project.json     story, language, style block, cast, scenes, prompts, narration, params, spend
   manifest.json    one record per asset: engine, seed, params, exact prompt sent, cost
+  activity.jsonl   one line per business event -- including the ones that cost
+                   money and produced nothing, which manifest.json cannot hold
   cast/            <project>_cast_<slug>_v<VV>.<jpg|png>  -- one reference portrait
                    per recurring character; inputs to the story, not frames of it
   images/          <project>_<NNN>_<slug>_v<VV>[_seed<SEED>].<jpg|png>
@@ -343,6 +345,59 @@ story's own detected language, which is the point of segmenting in it. Video
 models that advertise "native audio" are not used for this -- they invent
 ambience and dialogue from the image prompt and cannot be handed an approved
 script, so pictures move and TTS speaks.
+
+**What a story actually cost.** `manifest.json` is a good provenance record and
+it has one expensive blind spot: it only records successes. A generation that was
+billed and produced nothing -- a 451 content rejection, a download that died
+after the picture was made, a run cancelled after submission -- left no trace
+anywhere, and `project.json` kept a one-line detail per scene until the next
+attempt overwrote it. So the events that cost money and produced nothing were
+the only events not written down.
+
+`activity.jsonl` is the ledger that closes that. One JSON object per line, one
+line per business event, appended as it happens:
+
+    {"ts":"...","event":"attempt","kind":"image","scene":3,"outcome":"failed",
+     "stage":"poll","generation_id":"gen-3","estimate":0.09,"latency_ms":16, ...}
+    {"ts":"...","event":"render.finished","run_id":"df41719b","attempts":6,
+     "by_outcome":{"ok":5,"failed":1},"billed":0.29,"wasted":0.09}
+
+The line is written **when the attempt is made, not when it succeeds**, so a
+failure is as legible as a win -- and the context manager that opens it writes a
+line even if the code inside forgets to say how it ended, because a billable call
+that leaves no trace is the one thing this cannot tolerate.
+
+`stage` is what makes the money honest. An attempt that got past `submit` had a
+generation running, so it was billed whatever happened next; one that failed *at*
+submit with a connection error never reached Renderful and was not. A 451 counts
+as billed, because in this repo's history it was. `GET /api/projects/<id>/activity`
+returns the events plus the reconciliation:
+
+| Figure | What it answers |
+|---|---|
+| `estimated` vs `billed` | how close the pre-flight quote was |
+| **`wasted`** | money spent on attempts that produced no asset |
+| `waste_ratio` | that as a fraction of everything billed |
+| `unpriced_attempts` | billed calls that never reported a cost -- how wrong the above can be |
+| `claude_input_tokens` / `claude_output_tokens` | Claude, counted in tokens |
+
+Claude is deliberately kept out of the dollar columns: there is no token price
+table in this app, and inventing one so the money column looked complete would
+make every figure beside it quietly wrong. What its lines do carry is the thing
+that had no record at all -- which model *answered*, whether the ladder fell back
+from Opus to Sonnet, and how many tokens it thought with. Effort is billed at the
+output rate, so `output_tokens` is the number that moves when one of the effort
+constants in `config.py` changes.
+
+Nothing of the story goes in. Prompts and narration lines are recorded as a
+SHA-256 fingerprint -- enough to correlate two rows or match one to the manifest,
+useless to anyone who picks up the file. Keys and asset URLs are never written.
+The file lives inside the project directory, so deleting a project deletes its
+ledger with it, and it rotates at 1 MB keeping three older files.
+
+Everything above is Tier 0 of `docs/observability.md`, which reasons through why
+a single-user local app's observability problem is spend correctness and upstream
+drift rather than latency or scale, and what the later tiers would be worth.
 
 **The interface follows the story.** Once a language is detected, the page posts
 its own English strings to `POST /api/ui/strings` and redraws itself in that
@@ -746,7 +801,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 298 offline tests, free
+    .venv\Scripts\python -m pytest             # 327 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium

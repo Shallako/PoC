@@ -12,8 +12,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import (captions, compiler, config, engines, narration, renderful, store,
-               timeline, tts, video)
+from . import (activity, captions, compiler, config, engines, narration,
+               renderful, store, timeline, tts, video)
 from .naming import (anchor_stem, asset_stem, audio_stem, flat_stem,
                      video_stem)
 
@@ -35,6 +35,15 @@ class Job:
         self.started_at = store.now()
         self.finished_at: str | None = None
         self.thread: threading.Thread | None = None
+        # Correlates every activity line this batch writes, anchors included,
+        # so "what did that run cost" is one grep rather than a reconstruction
+        # from timestamps.
+        self.run_id = activity.new_run_id()
+        # What the plan quoted, carried here so each attempt can be logged
+        # beside its own estimate instead of against a batch total. Set by
+        # start() / start_audio() from the plan they already computed.
+        self.unit_price: float | None = None
+        self.estimates: dict[int, float] = {}
 
     @property
     def running(self) -> bool:
@@ -44,6 +53,7 @@ class Job:
         return {
             "running": self.running,
             "kind": self.kind,
+            "run_id": self.run_id,
             "scenes": self.scenes,
             "fatal": self.fatal,
             "started_at": self.started_at,
@@ -353,6 +363,48 @@ def _stopped_or_failed(job: "Job", error: Exception) -> dict:
     return {"status": "failed", "detail": str(error)}
 
 
+def _run_totals(job: "Job") -> dict:
+    """What a finished run actually did, read back off its own ledger lines.
+
+    Counted from what was written rather than tallied in memory, so the closing
+    figure and the individual rows can never disagree -- and a line that failed
+    to be written shows up as a discrepancy instead of being papered over.
+    """
+    rows = [ln for ln in activity.read(job.pid, run_id=job.run_id)
+            if ln.get("event") == "attempt"]
+    # activity.amount() and activity.was_billed() rather than a second tally of
+    # the same thing: `billed` on a run has to mean exactly what `billed` means
+    # in the project report, or the two disagree the first time an attempt fails
+    # without reporting a cost.
+    charged = [ln for ln in rows if activity.was_billed(ln)]
+    billed = sum(activity.amount(ln) for ln in charged)
+    wasted = sum(activity.amount(ln) for ln in charged
+                 if ln.get("outcome") != activity.OK)
+    outcomes: dict[str, int] = {}
+    for row in rows:
+        key = row.get("outcome", "?")
+        outcomes[key] = outcomes.get(key, 0) + 1
+    return {
+        "attempts": len(rows),
+        "by_outcome": outcomes,
+        "billed": round(billed, 4),
+        "wasted": round(wasted, 4),
+        "seconds": _elapsed(job),
+        "cancelled": job.stop.is_set(),
+        "fatal": job.fatal,
+    }
+
+
+def _elapsed(job: "Job") -> float | None:
+    from datetime import datetime
+    try:
+        started = datetime.strptime(job.started_at, "%Y-%m-%dT%H:%M:%SZ")
+        ended = datetime.strptime(job.finished_at, "%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError):
+        return None
+    return round((ended - started).total_seconds(), 1)
+
+
 def _set_scene(pid: str, n: int, **fields) -> None:
     def apply(project):
         for scene in project["scenes"]:
@@ -394,38 +446,53 @@ def _render_anchor(job: Job, slug: str, key: str, model: str, params: dict) -> N
     # recording that they used this week's.
     _set_member(pid, slug, status="rendering", detail="submitting")
 
-    try:
-        created = renderful.submit(prompt, key, model, shot)
-        gen_id = created.get("id")
-        if not gen_id:
-            raise RuntimeError(f"no generation id in response: {created}")
-        _set_member(pid, slug, detail=f"queued ({gen_id})")
-        status_doc = renderful.wait_for(
-            gen_id, key, should_stop=job.stop.is_set,
-            on_state=lambda st: _set_member(pid, slug, detail=str(st)))
-    except renderful.FatalAPIError as e:
-        job.stop.set()
-        job.fatal = str(e)
-        _set_member(pid, slug, status="failed", detail=str(e))
-        return
-    except Exception as e:  # noqa: BLE001 - one character's problem
-        _set_member(pid, slug, **_stopped_or_failed(job, e))
-        return
+    # Opened before the first billable call and closed however this ends, so a
+    # portrait that was paid for and never arrived is on the record too.
+    with activity.attempt(
+            pid, "anchor", run_id=job.run_id, character=slug,
+            engine=project.get("engine"), model=model,
+            gen_type=renderful.GEN_TYPE_IMAGE, version=version,
+            estimate=job.unit_price, prompt_sha256=activity.digest(prompt)) as att:
+        try:
+            created = renderful.submit(prompt, key, model, shot)
+            gen_id = created.get("id")
+            if not gen_id:
+                raise RuntimeError(f"no generation id in response: {created}")
+            att.submitted(gen_id)
+            _set_member(pid, slug, detail=f"queued ({gen_id})")
+            status_doc = renderful.wait_for(
+                gen_id, key, should_stop=job.stop.is_set,
+                on_state=lambda st: _set_member(pid, slug, detail=str(st)))
+        except renderful.FatalAPIError as e:
+            att.failed(e)
+            job.stop.set()
+            job.fatal = str(e)
+            _set_member(pid, slug, status="failed", detail=str(e))
+            return
+        except Exception as e:  # noqa: BLE001 - one character's problem
+            att.failed(e)
+            _set_member(pid, slug, **_stopped_or_failed(job, e))
+            return
 
-    urls = renderful.outputs_of(status_doc)
-    if not urls:
-        _set_member(pid, slug, status="failed", detail="completed with no outputs")
-        return
-    try:
-        data = renderful.download(urls[0])
-    except Exception as e:  # noqa: BLE001
-        _set_member(pid, slug, status="failed", detail=f"download: {e}")
-        return
+        urls = renderful.outputs_of(status_doc)
+        cost = status_doc.get("cost", created.get("cost"))
+        if not urls:
+            att.finish(activity.FAILED, error="completed with no outputs", cost=cost)
+            _set_member(pid, slug, status="failed", detail="completed with no outputs")
+            return
+        att.downloading()
+        try:
+            data = renderful.download(urls[0])
+        except Exception as e:  # noqa: BLE001
+            att.failed(e, cost=cost)
+            _set_member(pid, slug, status="failed", detail=f"download: {e}")
+            return
 
-    dest = store.cast_dir(pid) / anchor_stem(pid, slug, version)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    written = renderful.save_delivered(data, dest, convert_png=False)
-    cost = status_doc.get("cost", created.get("cost"))
+        att.saving()
+        dest = store.cast_dir(pid) / anchor_stem(pid, slug, version)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        written = renderful.save_delivered(data, dest, convert_png=False)
+        att.ok(cost=cost, bytes=len(data), file=written.name)
 
     store.record_asset(pid, store.anchor_manifest_entry(
         pid, {**member, "version": version}, project, engine_model=model,
@@ -499,60 +566,76 @@ def _render_one(job: Job, project_snapshot: dict, scene_n: int, key: str,
 
     _set_scene(pid, scene_n, status="rendering", detail="submitting", version=version)
 
-    try:
-        created = renderful.submit(prompt, key, send_model, params,
-                                   gen_type=gen_type, references=urls)
-    except renderful.FatalAPIError as e:
-        job.stop.set()
-        job.fatal = str(e)
-        _set_scene(pid, scene_n, status="failed", detail=str(e))
-        return
-    except Exception as e:  # noqa: BLE001 - one prompt's problem, keep the batch going
-        _set_scene(pid, scene_n, **_stopped_or_failed(job, e))
-        return
+    with activity.attempt(
+            pid, "image", run_id=job.run_id, scene=scene_n, slug=scene["slug"],
+            engine=project.get("engine"), model=send_model, gen_type=gen_type,
+            version=version, seed=params.get("seed"), estimate=job.unit_price,
+            references=len(urls), reference_tokens=list(used_tokens),
+            prompt_sha256=activity.digest(prompt)) as att:
+        try:
+            created = renderful.submit(prompt, key, send_model, params,
+                                       gen_type=gen_type, references=urls)
+        except renderful.FatalAPIError as e:
+            att.failed(e)
+            job.stop.set()
+            job.fatal = str(e)
+            _set_scene(pid, scene_n, status="failed", detail=str(e))
+            return
+        except Exception as e:  # noqa: BLE001 - one prompt's problem, keep the batch going
+            att.failed(e)
+            _set_scene(pid, scene_n, **_stopped_or_failed(job, e))
+            return
 
-    gen_id = created.get("id")
-    if not gen_id:
-        _set_scene(pid, scene_n, status="failed",
-                   detail=f"no generation id in response: {created}")
-        return
+        gen_id = created.get("id")
+        if not gen_id:
+            att.finish(activity.FAILED, error="no generation id in response")
+            _set_scene(pid, scene_n, status="failed",
+                       detail=f"no generation id in response: {created}")
+            return
+        att.submitted(gen_id)
 
-    _set_scene(pid, scene_n, status="rendering", detail=f"queued ({gen_id})",
-               generation_id=gen_id)
+        _set_scene(pid, scene_n, status="rendering", detail=f"queued ({gen_id})",
+                   generation_id=gen_id)
 
-    try:
-        status_doc = renderful.wait_for(
-            gen_id, key,
-            should_stop=job.stop.is_set,
-            on_state=lambda st: _set_scene(pid, scene_n, detail=str(st)),
-        )
-    except renderful.FatalAPIError as e:
-        job.stop.set()
-        job.fatal = str(e)
-        _set_scene(pid, scene_n, status="failed", detail=str(e))
-        return
-    except Exception as e:  # noqa: BLE001
-        _set_scene(pid, scene_n, **_stopped_or_failed(job, e))
-        return
+        try:
+            status_doc = renderful.wait_for(
+                gen_id, key,
+                should_stop=job.stop.is_set,
+                on_state=lambda st: _set_scene(pid, scene_n, detail=str(st)),
+            )
+        except renderful.FatalAPIError as e:
+            att.failed(e)
+            job.stop.set()
+            job.fatal = str(e)
+            _set_scene(pid, scene_n, status="failed", detail=str(e))
+            return
+        except Exception as e:  # noqa: BLE001
+            att.failed(e)
+            _set_scene(pid, scene_n, **_stopped_or_failed(job, e))
+            return
 
-    out_urls = renderful.outputs_of(status_doc)
-    if not out_urls:
-        _set_scene(pid, scene_n, status="failed",
-                   detail=f"completed with no outputs: {status_doc}")
-        return
+        out_urls = renderful.outputs_of(status_doc)
+        cost = status_doc.get("cost", created.get("cost"))
+        if not out_urls:
+            att.finish(activity.FAILED, error="completed with no outputs", cost=cost)
+            _set_scene(pid, scene_n, status="failed",
+                       detail=f"completed with no outputs: {status_doc}")
+            return
 
-    try:
-        data = renderful.download(out_urls[0])
-    except Exception as e:  # noqa: BLE001
-        _set_scene(pid, scene_n, status="failed", detail=f"download: {e}")
-        return
+        att.downloading()
+        try:
+            data = renderful.download(out_urls[0])
+        except Exception as e:  # noqa: BLE001
+            att.failed(e, cost=cost)
+            _set_scene(pid, scene_n, status="failed", detail=f"download: {e}")
+            return
 
-    stem = asset_stem(pid, scene_n, scene["slug"], version, params.get("seed"))
-    dest = store.images_dir(pid) / stem
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    written = renderful.save_delivered(data, dest, convert_png=False)
-
-    cost = status_doc.get("cost", created.get("cost"))
+        att.saving()
+        stem = asset_stem(pid, scene_n, scene["slug"], version, params.get("seed"))
+        dest = store.images_dir(pid) / stem
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        written = renderful.save_delivered(data, dest, convert_png=False)
+        att.ok(cost=cost, bytes=len(data), file=written.name)
     entry = store.manifest_entry(
         pid, {**scene, "version": version}, project,
         engine_model=send_model, prompt=prompt, params=params,
@@ -650,6 +733,8 @@ def _run(job: Job, key: str, model: str, params: dict, snapshot: dict,
                     scene["status"] = "pending"
                     scene["detail"] = job.fatal or "stopped"
         store.mutate(job.pid, apply)
+        activity.record(job.pid, "render.finished", run_id=job.run_id,
+                        **_run_totals(job))
 
 
 def start(pid: str, scene_numbers: list[int] | None = None, force: bool = False) -> dict:
@@ -692,6 +777,12 @@ def start(pid: str, scene_numbers: list[int] | None = None, force: bool = False)
     store.mutate(pid, apply)
 
     job = Job(pid, numbers, KIND_RENDER)
+    job.unit_price = the_plan["price_per_image"]
+    activity.record(pid, "render.started", run_id=job.run_id,
+                    engine=the_plan["engine"], model=model,
+                    scenes=len(numbers), anchors=len(anchors),
+                    skipped=len(the_plan["skip"]),
+                    estimate=the_plan["estimate"], forced=force)
     with _jobs_guard:
         _jobs[_slot(pid, KIND_RENDER)] = job
     job.thread = threading.Thread(
@@ -806,27 +897,39 @@ def _speak_one(job: Job, scene_n: int, key: str, voice_key: str, model: str,
 
     _set_scene(pid, scene_n, audio_status="speaking", audio_detail="submitting")
 
-    try:
-        speech = tts.synthesize(
-            text, key, model, params,
-            should_stop=job.stop.is_set,
-            on_state=lambda st: _set_scene(pid, scene_n, audio_detail=str(st)),
-        )
-    except renderful.FatalAPIError as e:
-        job.stop.set()
-        job.fatal = str(e)
-        _set_scene(pid, scene_n, audio_status="failed", audio_detail=str(e))
-        return
-    except Exception as e:  # noqa: BLE001 - one line's problem, keep the batch going
-        state = _stopped_or_failed(job, e)
-        _set_scene(pid, scene_n, audio_status=state["status"],
-                   audio_detail=state["detail"])
-        return
+    with activity.attempt(
+            pid, "speech", run_id=job.run_id, scene=scene_n, slug=scene["slug"],
+            engine=voice_key, model=model,
+            gen_type=renderful.GEN_TYPE_AUDIO, chars=len(text),
+            estimate=job.estimates.get(scene_n),
+            prompt_sha256=activity.digest(text)) as att:
+        try:
+            speech = tts.synthesize(
+                text, key, model, params,
+                should_stop=job.stop.is_set,
+                on_state=lambda st: _set_scene(pid, scene_n, audio_detail=str(st)),
+                on_submit=att.submitted,
+            )
+        except renderful.FatalAPIError as e:
+            att.failed(e)
+            job.stop.set()
+            job.fatal = str(e)
+            _set_scene(pid, scene_n, audio_status="failed", audio_detail=str(e))
+            return
+        except Exception as e:  # noqa: BLE001 - one line's problem, keep the batch going
+            att.failed(e)
+            state = _stopped_or_failed(job, e)
+            _set_scene(pid, scene_n, audio_status=state["status"],
+                       audio_detail=state["detail"])
+            return
 
-    dest = store.audio_dir(pid) / audio_stem(pid, scene_n, scene["slug"])
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    written = dest.with_suffix("." + speech.extension)
-    written.write_bytes(speech.data)
+        att.saving()
+        dest = store.audio_dir(pid) / audio_stem(pid, scene_n, scene["slug"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        written = dest.with_suffix("." + speech.extension)
+        written.write_bytes(speech.data)
+        att.ok(cost=speech.cost, bytes=len(speech.data), file=written.name,
+               seconds=speech.seconds, measured=speech.measured)
 
     # A container we cannot parse still produced usable audio; fall back to the
     # estimate rather than losing the line.
@@ -884,6 +987,8 @@ def _run_audio(job: Job, key: str, voice_key: str, model: str, params: dict) -> 
                     scene["audio_status"] = "pending"
                     scene["audio_detail"] = job.fatal or "stopped"
         store.mutate(job.pid, apply)
+        activity.record(job.pid, "audio.finished", run_id=job.run_id,
+                        **_run_totals(job))
 
 
 def start_audio(pid: str, scene_numbers: list[int] | None = None,
@@ -918,6 +1023,11 @@ def start_audio(pid: str, scene_numbers: list[int] | None = None,
     store.mutate(pid, apply)
 
     job = Job(pid, numbers, KIND_AUDIO)
+    job.estimates = {row["n"]: row["estimate"] for row in the_plan["speak"]}
+    activity.record(pid, "audio.started", run_id=job.run_id,
+                    engine=the_plan["voice_engine"], model=the_plan["model"],
+                    lines=len(numbers), chars=the_plan["chars"],
+                    estimate=the_plan["estimate"], forced=force)
     with _jobs_guard:
         _jobs[_slot(pid, KIND_AUDIO)] = job
     job.thread = threading.Thread(
@@ -1047,6 +1157,15 @@ def _run_video(job: Job, project: dict, settings: dict) -> None:
                     scene["video_status"] = "pending"
                     scene["video_detail"] = job.fatal or "stopped"
         store.mutate(job.pid, apply)
+        # Costs nothing, so it has no attempt line -- but "how long does a cut
+        # take per finished minute" is a figure the plan asks for and nothing
+        # else records.
+        cut = store.load(job.pid).get("video") or {}
+        activity.record(job.pid, "video.assembled", run_id=job.run_id,
+                        scenes=len(job.scenes), seconds=cut.get("seconds"),
+                        measured=cut.get("measured"), file=cut.get("file"),
+                        encode_seconds=_elapsed(job),
+                        cancelled=job.stop.is_set(), fatal=job.fatal)
 
 
 def start_video(pid: str) -> dict:
@@ -1074,6 +1193,8 @@ def start_video(pid: str) -> dict:
     store.mutate(pid, apply)
 
     job = Job(pid, numbers, KIND_VIDEO)
+    activity.record(pid, "video.started", run_id=job.run_id, scenes=len(numbers),
+                    aspect=the_plan.get("aspect"), preset=config.VIDEO_PRESET)
     with _jobs_guard:
         _jobs[_slot(pid, KIND_VIDEO)] = job
     job.thread = threading.Thread(

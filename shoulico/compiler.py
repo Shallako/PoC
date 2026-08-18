@@ -12,8 +12,9 @@ import json
 import logging
 import re
 import time
+from contextlib import contextmanager
 
-from . import config, security
+from . import activity, config, security
 from .naming import slugify
 
 # Dialogue quoting is language-specific: French uses guillemets, German low/high
@@ -429,8 +430,11 @@ def _call(system: str, user: str, schema: dict, api_key: str | None,
                         kind, attempt_model, i + 1, len(plan), exc)
             continue
         if meta is not None:
+            usage = getattr(message, "usage", None)
             meta.update(model=attempt_model, attempts=i + 1,
-                        fell_back=attempt_model != model)
+                        fell_back=attempt_model != model,
+                        input_tokens=getattr(usage, "input_tokens", None),
+                        output_tokens=getattr(usage, "output_tokens", None))
         if attempt_model != model:
             log.warning("Claude: %s stayed unavailable, so %s answered instead.",
                         model, attempt_model)
@@ -439,10 +443,62 @@ def _call(system: str, user: str, schema: dict, api_key: str | None,
     raise _explain(last, kind, attempts=len(plan), waited=waited) from None
 
 
+class _Note:
+    """Carries the ladder's own metadata into the ledger line.
+
+    `meta` is the dict `_call` fills in with the model that actually answered;
+    when the caller did not ask for one, this supplies it so the record is the
+    same either way.
+    """
+
+    def __init__(self, att) -> None:
+        self.att = att
+        self.meta: dict = {}
+        self.outcome = activity.OK
+
+    def answered(self, meta: dict, message) -> None:
+        reason = getattr(message, "stop_reason", None)
+        # A refusal and a truncation both arrive as a successful HTTP response
+        # that cost full output tokens and produced nothing usable, which is
+        # precisely the shape of event this ledger exists to catch. Recording
+        # them as `ok` because the request did not error would put the two
+        # most expensive kinds of nothing back in the blind spot.
+        if reason == "refusal":
+            self.outcome = activity.REJECTED
+        elif reason == "max_tokens":
+            self.outcome = activity.FAILED
+        if self.att is None:
+            return
+        self.att.extra.update({
+            "answered_by": meta.get("model"),
+            "attempts": meta.get("attempts"),
+            "fell_back": meta.get("fell_back"),
+            "input_tokens": meta.get("input_tokens"),
+            "output_tokens": meta.get("output_tokens"),
+            "stop_reason": reason,
+        })
+
+
+@contextmanager
+def _recorded(pid: str | None, task: str, model: str, effort: str):
+    """A ledger line per Claude call, or nothing at all when there is no project
+    to file it under -- `strings_for` translates the interface, which belongs to
+    no story."""
+    if not pid:
+        yield _Note(None)
+        return
+    with activity.attempt(pid, "claude", task=task, model=model,
+                          effort=effort) as att:
+        note = _Note(att)
+        yield note
+        att.finish(note.outcome)
+
+
 def _structured_call(system: str, user: str, schema: dict, api_key: str | None,
                      model: str, max_tokens: int = 32000,
                      meta: dict | None = None, stop=None,
-                     effort: str = config.SEGMENT_EFFORT) -> dict:
+                     effort: str = config.SEGMENT_EFFORT,
+                     pid: str | None = None, task: str = "claude") -> dict:
     """One streamed, schema-constrained Claude call, ridden through overloads.
 
     `stop` is a threading.Event the caller may set from another request to
@@ -456,7 +512,15 @@ def _structured_call(system: str, user: str, schema: dict, api_key: str | None,
     if effort not in config.CLAUDE_EFFORTS:
         raise ValueError(
             f"effort must be one of {', '.join(config.CLAUDE_EFFORTS)}, not {effort!r}")
-    message = _call(system, user, schema, api_key, model, max_tokens, meta, stop, effort)
+
+    # Claude was the one spender with no record at all: which model actually
+    # answered, whether the ladder fell back, and how many tokens it thought
+    # with. Effort is billed at the output rate, so `output_tokens` here is the
+    # number that moves when one of the effort constants is changed.
+    with _recorded(pid, task, model, effort) as note:
+        message = _call(system, user, schema, api_key, model, max_tokens,
+                        meta if meta is not None else note.meta, stop, effort)
+        note.answered(meta if meta is not None else note.meta, message)
 
     if message.stop_reason == "refusal":
         details = getattr(message, "stop_details", None)
@@ -512,6 +576,7 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
             engine_name: str = "Seedream 5.0 Pro",
             dialect_notes: list[str] | None = None,
             prompt_language: str = "story",
+            pid: str | None = None,
             stop=None) -> dict:
     """Return {'language','model','fell_back','style_profile','scenes'}."""
     story = (story or "").strip()
@@ -538,7 +603,8 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
 
     meta: dict = {}
     data = _structured_call(SEGMENT_SYSTEM, user, SEGMENT_SCHEMA, api_key, model,
-                            meta=meta, stop=stop, effort=effort)
+                            meta=meta, stop=stop, effort=effort,
+                            pid=pid, task="segment")
 
     cast = normalize_cast(data.get("cast"))
     known = {c["name"] for c in cast}
