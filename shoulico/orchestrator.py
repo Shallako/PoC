@@ -8,7 +8,7 @@ idempotent resume driven by the *stored prompt*, never by file timestamps.
 from __future__ import annotations
 
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -201,6 +201,12 @@ def _token(slug: str, version: int) -> str:
     scene has to be told it is stale.
     """
     return f"{slug}@{version}"
+
+
+def _slug_of(token: str) -> str:
+    """The character a scene's reference token names. The inverse of _token();
+    a slug is [a-z0-9-] so the separator can never appear inside one."""
+    return token.rsplit("@", 1)[0]
 
 
 def plan_cast(project: dict, force: bool = False) -> dict:
@@ -587,24 +593,49 @@ def _run(job: Job, key: str, model: str, params: dict, snapshot: dict,
          anchors: list[str] | None = None,
          tokens_by_scene: dict[int, list[str]] | None = None) -> None:
     tokens_by_scene = tokens_by_scene or {}
+    building = set(anchors or ())
     try:
         with ThreadPoolExecutor(max_workers=config.WORKERS) as pool:
-            # Anchors first, and every one of them finishes before any scene
-            # starts. This is the one barrier in the whole app: a scene submitted
-            # before its reference exists renders the wrong face and bills for it.
-            if anchors:
-                for f in [pool.submit(_render_anchor, job, slug, key, model, params)
-                          for slug in anchors]:
-                    try:
-                        f.result()
-                    except Exception:  # noqa: BLE001 - recorded per character
-                        pass
+            # A scene may not be submitted before the portraits it references
+            # exist: it would render the wrong face and bill for it. But it only
+            # depends on *its own* characters. Waiting for the whole cast made a
+            # landscape scene queue behind six portraits it never uses, and with
+            # MAX_CAST at six that is two full rounds of workers sitting idle.
+            #
+            # So each scene waits for exactly what it names, and the waiting is
+            # done here rather than inside a worker -- a worker that blocked on
+            # another worker could deadlock the pool it is holding a slot in.
+            anchor_futures = {
+                pool.submit(_render_anchor, job, slug, key, model, params): slug
+                for slug in building
+            }
+            # Only anchors being rendered *now* can be waited for. One that was
+            # skipped as already current has its portrait on disk already.
+            waiting = {n: {_slug_of(t) for t in tokens_by_scene.get(n, [])} & building
+                       for n in job.scenes}
+            futures = []
 
-            futures = [
-                pool.submit(_render_one, job, snapshot, n, key, model, params,
-                            tokens_by_scene.get(n, []))
-                for n in job.scenes
-            ]
+            def start_ready() -> None:
+                for n in [n for n, needs in waiting.items() if not needs]:
+                    del waiting[n]
+                    futures.append(pool.submit(_render_one, job, snapshot, n, key,
+                                               model, params, tokens_by_scene.get(n, [])))
+
+            start_ready()                       # scenes with nobody in them go now
+            for done in as_completed(anchor_futures):
+                slug = anchor_futures[done]
+                try:
+                    done.result()
+                except Exception:  # noqa: BLE001 - recorded per character
+                    pass
+                # Released whether the portrait worked or not: a failed anchor is
+                # dropped by references_for and the scene falls back to
+                # text-to-image, which is better than never rendering it.
+                for needs in waiting.values():
+                    needs.discard(slug)
+                start_ready()
+
+            start_ready()                       # belt and braces: nothing left behind
             for f in futures:
                 try:
                     f.result()

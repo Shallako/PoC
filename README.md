@@ -393,6 +393,17 @@ records the anchors it actually used as `slug@version` tokens, so:
   the URL are two halves of one token -- advertising v2 while still holding v1's
   picture would condition every scene on the old face while recording the new.
 
+**A scene waits for its own characters, not for everybody's.** A scene submitted
+before its portraits exist renders the wrong face and bills for it, so the wait
+is real -- but it used to be all-or-nothing: every portrait finished before any
+scene started. That is the right guarantee stated too broadly. A landscape scene
+with nobody in it queued behind six portraits it never references, and with
+`MAX_CAST` at six and five workers that is two full rounds of workers sitting
+idle. Each scene now waits for exactly the characters it names, and scenes that
+name nobody start immediately. The waiting is done by the run's own thread
+rather than inside a worker, because a worker blocking on another worker could
+deadlock the pool it is holding a slot in.
+
 Engines without a reference sibling (`custom`) cannot do this; the mode turns
 itself off and the API refuses to turn it back on rather than silently ignoring
 it. Turn it off deliberately with the checkbox on step 2.
@@ -716,8 +727,13 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 292 offline tests, free
+    .venv\Scripts\python -m pytest             # 298 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
+
+There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium
+and is the only thing here that can prove a textarea keeps its text, its focus
+and its caret while the page redraws underneath it. It needs a Node toolchain,
+so it stays out of `pytest` -- see `tests/browser/README.md`.
 
 The offline suite drives the real FastAPI app against a fake Renderful HTTP
 server on loopback and a fake Anthropic client, so the retry ladder, poll loop,

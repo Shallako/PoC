@@ -18,6 +18,10 @@ projects/
 # Cached interface translations -- regenerated on demand, one Claude call each
 i18n/
 
+# The browser check's toolchain. package.json and the lockfile are tracked so
+# the versions are reproducible; the 200MB of downloaded node and browser is not.
+tests/browser/node_modules/
+
 # Editor / OS local config
 .vscode/
 .idea/
