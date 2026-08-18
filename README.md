@@ -470,6 +470,35 @@ interface is a Claude call and can hang the same way, but it is a preference in
 the header rather than a phase of the workflow; if it becomes a problem, it
 takes the same `running_call` treatment.
 
+**What the Claude calls cost.** Three calls, three difficulties, and they no
+longer share one model and one thinking depth. Measured with `count_tokens`
+against the real prompts:
+
+| Call | Input | Visible output | Model | Effort |
+|---|---:|---:|---|---|
+| Segment | 3,107 tok (5,000-char story) | ~4,300 tok at 12 scenes | `SEGMENT_MODEL` | `high` |
+| Narration | ~2,300 tok | ~400 tok | `NARRATION_MODEL` | `medium` |
+| Translate interface | ~6,500 tok, once per language | similar | `TRANSLATE_MODEL` | `low` |
+
+Visible output runs about **350 tokens per scene** plus the shared style block,
+so scene count is the multiplier on both tokens and dollars — 20 scenes is 5,700
+output tokens *and* $1.80 of pictures. Thinking tokens are billed at the output
+rate and are not in those figures; `display` is omitted, so they cannot be
+observed from outside a live call.
+
+Segmenting keeps Opus at high effort because everything downstream rests on it:
+it reads the story, finds the beats, writes engine-targeted prompts and picks out
+the recurring cast in one pass. The other two do not need that. Each is one
+constant in `config.py` — raise any of them back if the quality is not there.
+Effort must be one of `CLAUDE_EFFORTS`, checked before the call so a typo is a
+sentence rather than an opaque 400 the next time somebody renders.
+
+Two things that look like savings and are not. **Prompt caching** does not pay
+here: the shared prefix is the 1,529-token system prompt, call volume is low, and
+a 1.25x write premium against occasional 0.1x reads is a fraction of a cent.
+**`max_tokens`** is a ceiling, not a spend — lowering it buys nothing and risks
+truncating a good answer, since on Opus 5 it caps thinking and text together.
+
 **When Claude is overloaded.** `overloaded_error` (HTTP 529) means Anthropic
 turned the request away before the model ran -- it is capacity on their side, it
 has nothing to do with the story, and nothing is charged for it. The SDK's own
@@ -477,7 +506,9 @@ retries are sub-second and twice, which is right for a blip and useless for a
 busy few minutes, so `compiler._call` ladders on top of them: four tries on the
 requested model at 3s, 8s and 20s, then one try on `FALLBACK_CLAUDE_MODEL`
 (`claude-sonnet-5`) as a last resort. Set that to `""` in `config.py` to fail
-instead of falling back.
+instead of falling back. A call already running on that model — narration, now —
+has no fallback tier and simply gets its four tries, which is the right answer:
+the reason to escalate is that Opus saturates first.
 
 If the fallback answers, the project records which model actually wrote the
 scenes (`claude_model`, `claude_fell_back`) and step 1 says so, because a set
@@ -641,7 +672,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 257 offline tests, free
+    .venv\Scripts\python -m pytest             # 277 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 The offline suite drives the real FastAPI app against a fake Renderful HTTP

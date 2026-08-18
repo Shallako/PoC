@@ -364,13 +364,13 @@ def _sleep(seconds: float, stop) -> None:
 
 
 def _stream_once(client, system: str, user: str, schema: dict, model: str,
-                 max_tokens: int, stop=None):
+                 max_tokens: int, stop=None, effort: str = config.SEGMENT_EFFORT):
     with client.messages.stream(
         model=model,
         max_tokens=max_tokens,
         thinking={"type": "adaptive"},
         output_config={
-            "effort": "high",
+            "effort": effort,
             "format": {"type": "json_schema", "schema": schema},
         },
         system=system,
@@ -387,7 +387,8 @@ def _stream_once(client, system: str, user: str, schema: dict, model: str,
 
 
 def _call(system: str, user: str, schema: dict, api_key: str | None,
-          model: str, max_tokens: int, meta: dict | None, stop=None):
+          model: str, max_tokens: int, meta: dict | None, stop=None,
+          effort: str = config.SEGMENT_EFFORT):
     """Ride out a capacity blip on the requested model, then try the fallback.
 
     Only capacity and connection failures are retried. A bad request or an
@@ -415,7 +416,7 @@ def _call(system: str, user: str, schema: dict, api_key: str | None,
                 raise Cancelled("stopped while waiting to retry")
         try:
             message = _stream_once(client, system, user, schema, attempt_model,
-                                   max_tokens, stop)
+                                   max_tokens, stop, effort)
         except Cancelled:
             raise
         except Exception as exc:  # noqa: BLE001 - classified on the next line
@@ -440,13 +441,22 @@ def _call(system: str, user: str, schema: dict, api_key: str | None,
 
 def _structured_call(system: str, user: str, schema: dict, api_key: str | None,
                      model: str, max_tokens: int = 32000,
-                     meta: dict | None = None, stop=None) -> dict:
+                     meta: dict | None = None, stop=None,
+                     effort: str = config.SEGMENT_EFFORT) -> dict:
     """One streamed, schema-constrained Claude call, ridden through overloads.
 
     `stop` is a threading.Event the caller may set from another request to
-    abandon the call -- see orchestrator.running_call().
+    abandon the call -- see orchestrator.running_call(). `effort` is how hard
+    the model thinks, and thinking is billed at the output rate, so it is the
+    difference between paying to reason about a story and paying to reason
+    about a list of button labels.
     """
-    message = _call(system, user, schema, api_key, model, max_tokens, meta, stop)
+    # Checked here rather than left to the API: a typo in one config constant
+    # would otherwise surface as an opaque 400 on the next thing anyone renders.
+    if effort not in config.CLAUDE_EFFORTS:
+        raise ValueError(
+            f"effort must be one of {', '.join(config.CLAUDE_EFFORTS)}, not {effort!r}")
+    message = _call(system, user, schema, api_key, model, max_tokens, meta, stop, effort)
 
     if message.stop_reason == "refusal":
         details = getattr(message, "stop_details", None)
@@ -497,7 +507,8 @@ def normalize_language(raw) -> dict:
 
 def segment(story: str, scene_count: int, *, style_hint: str = "",
             api_key: str | None = None,
-            model: str = config.DEFAULT_CLAUDE_MODEL,
+            model: str = config.SEGMENT_MODEL,
+            effort: str = config.SEGMENT_EFFORT,
             engine_name: str = "Seedream 5.0 Pro",
             dialect_notes: list[str] | None = None,
             prompt_language: str = "story",
@@ -527,7 +538,7 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
 
     meta: dict = {}
     data = _structured_call(SEGMENT_SYSTEM, user, SEGMENT_SCHEMA, api_key, model,
-                            meta=meta, stop=stop)
+                            meta=meta, stop=stop, effort=effort)
 
     cast = normalize_cast(data.get("cast"))
     known = {c["name"] for c in cast}

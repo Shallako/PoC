@@ -59,7 +59,8 @@ def generate(story: str, scenes: list[dict], *, voice: str = "",
              seconds_per_scene: int = 8,
              language: dict | None = None,
              api_key: str | None = None,
-             model: str = config.DEFAULT_CLAUDE_MODEL,
+             model: str = config.NARRATION_MODEL,
+             effort: str = config.NARRATION_EFFORT,
              stop=None) -> dict[int, str]:
     """Return {scene_ordinal: narration text}."""
     story = (story or "").strip()
@@ -93,7 +94,7 @@ def generate(story: str, scenes: list[dict], *, voice: str = "",
     )
 
     data = _structured_call(NARRATION_SYSTEM, user, NARRATION_SCHEMA, api_key, model,
-                            max_tokens=16000, stop=stop)
+                            max_tokens=16000, stop=stop, effort=effort)
 
     by_ordinal: dict[int, str] = {}
     lines = data.get("lines", [])

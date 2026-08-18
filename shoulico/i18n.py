@@ -140,7 +140,8 @@ before it spends money. Do not make it chattier or more formal than the English.
 
 def translate(strings: dict, *, code: str, name: str = "", native_name: str = "",
               api_key: str | None = None,
-              model: str = config.DEFAULT_CLAUDE_MODEL) -> dict:
+              model: str = config.TRANSLATE_MODEL,
+              effort: str = config.TRANSLATE_EFFORT) -> dict:
     """{key: english} -> {key: translated}. One call, all keys."""
     strings = {str(k): str(v) for k, v in (strings or {}).items() if str(v).strip()}
     if not strings:
@@ -167,7 +168,7 @@ def translate(strings: dict, *, code: str, name: str = "", native_name: str = ""
     )
 
     data = _structured_call(TRANSLATE_SYSTEM, user, TRANSLATE_SCHEMA, api_key, model,
-                            max_tokens=32000)
+                            max_tokens=32000, effort=effort)
 
     out = {}
     for item in data.get("items", []):
@@ -194,7 +195,8 @@ def translate(strings: dict, *, code: str, name: str = "", native_name: str = ""
 
 def strings_for(code: str, strings: dict, *, name: str = "", native_name: str = "",
                 api_key: str | None = None,
-                model: str = config.DEFAULT_CLAUDE_MODEL) -> dict:
+                model: str = config.TRANSLATE_MODEL,
+                effort: str = config.TRANSLATE_EFFORT) -> dict:
     """Translated copies of `strings`, translating (and caching) only what is new.
 
     English is not a translation job: it is what the page already says.
@@ -209,7 +211,7 @@ def strings_for(code: str, strings: dict, *, name: str = "", native_name: str = 
         fresh = {}
         if stale:
             fresh = translate(stale, code=code, name=name, native_name=native_name,
-                              api_key=api_key, model=model)
+                              api_key=api_key, model=model, effort=effort)
             if fresh:
                 cached.update({k: {"src": stale[k], "text": v} for k, v in fresh.items()})
                 save(code, cached)
