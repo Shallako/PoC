@@ -616,7 +616,12 @@ def registry(reload: bool = False) -> dict:
         path = config.ENGINES_FILE
         if not path.is_file():
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(DEFAULT_REGISTRY, indent=2), encoding="utf-8")
+            # ensure_ascii=False on both writes, or the two disagree: a fresh
+            # file gets \u2014 where a migrated one gets the character itself,
+            # so the first migration rewrites every line that has punctuation in
+            # it and the diff says nothing about what actually changed.
+            path.write_text(json.dumps(DEFAULT_REGISTRY, indent=2, ensure_ascii=False),
+                            encoding="utf-8")
             _cache = json.loads(json.dumps(DEFAULT_REGISTRY))
         else:
             loaded, changed = _migrate(json.loads(path.read_text(encoding="utf-8")))
