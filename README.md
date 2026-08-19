@@ -364,6 +364,24 @@ in the page would be a second opinion about money and would miss it. So the
 table is drawn from the whole plan and the cost bar from the selection's --
 two local calls, both free.
 
+**A selection renders the portraits it uses, and no others.** A character's
+reference portrait is a dependency of the scenes that name them, and a billed
+image in its own right. Asking for two scenes used to queue *every* out-of-date
+portrait in the cast, including characters neither scene has in it -- so
+narrowing a render to save money could quietly cost more than the scenes it
+dropped. Six workers, one scene selected, and the invoice has the whole cast on
+it.
+
+The whole batch is exempt: ask for everything and you get everything, including
+a portrait no scene currently references. Segmentation prunes a character nobody
+appears with, so that case arrives by editing afterwards -- take a character out
+of the one scene that had them and the cast member stays behind, still wanted,
+with the batch button the only thing that will draw their face.
+
+The ones left out are named rather than dropped in silence. They are still out
+of date, and unsaid, narrowing the selection would look like it had fixed
+something it only postponed.
+
 **An empty selection means none of them.** It used to mean all of them, because
 an empty list is falsy and `scene_numbers` was read for truth rather than for
 presence. That never came up while the only subset the page could send was one
@@ -1092,7 +1110,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 424 offline tests, free
+    .venv\Scripts\python -m pytest             # 433 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium

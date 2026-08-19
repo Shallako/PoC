@@ -528,6 +528,7 @@ const DYN = {
   "cast.norender": "no portrait yet",
   "cast.dirty": "description changed — will re-render",
   "plan.summary": "{count} to render, {skipped} already current. Estimated {estimate} at {price}/image.",
+  "plan.anchors.left": "Out of date but not needed here — {names}. No selected scene has them in it, so they are not rendered and not billed.",
   "plan.nokey": "No Renderful API key found. Set RENDERFUL_API_KEY or put the key in api_key.txt, then restart.",
   "plan.unverified": "This engine is marked unverified in engines.json. Render one scene before committing to a batch.",
   "risk.title": "These prompts may be refused by the image service",
@@ -1365,6 +1366,14 @@ async function refreshPlan() {
       html += `<div class="note">${escapeHtml(tf("plan.anchors", {
         count: plan.anchor_count,
         names: plan.anchors.map((a) => a.name).join(", "),
+      }))}</div>`;
+    }
+    // A portrait left out because no selected scene uses it is still out of
+    // date. Said plainly, or narrowing the selection looks like it fixed
+    // something it only postponed.
+    if ((plan.anchors_unused || []).length) {
+      html += `<div class="note">${escapeHtml(tf("plan.anchors.left", {
+        names: plan.anchors_unused.map((a) => a.name).join(", "),
       }))}</div>`;
     }
     html += pickedNote(PICK_RENDER);

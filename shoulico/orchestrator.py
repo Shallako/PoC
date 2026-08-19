@@ -331,6 +331,34 @@ def scene_tokens(project: dict, scene: dict, versions: dict) -> list[str]:
     return tokens[:cap]
 
 
+def _anchors_for(stale: list[dict], scenes: list[dict],
+                 scene_numbers: list[int] | None) -> tuple[list[dict], list[dict]]:
+    """The portraits this run actually needs, and the ones it does not.
+
+    A portrait is a dependency of the scenes that reference it, and it is a
+    billed image in its own right. Asking for two scenes used to queue *every*
+    out-of-date portrait in the cast, including characters neither scene has in
+    it -- so narrowing a render to save money could quietly cost more than the
+    scenes did.
+
+    Only when a selection was made. Ask for the whole batch and you get the
+    whole batch, including a portrait no scene currently references -- the batch
+    button is the only thing that will render one. Segmentation prunes a
+    character nobody appears with, so that case arrives by editing afterwards:
+    take a character out of the one scene that had them and the cast member
+    stays behind, still wanted, with nothing else able to draw their face.
+    """
+    if scene_numbers is None:
+        return stale, []
+    needed = {_slug_of(token)
+              for row in scenes for token in (row.get("references") or [])}
+    keep = [a for a in stale if a["slug"] in needed]
+    left = [{**a, "reason_key": "unselected",
+             "reason": "no selected scene uses this character"}
+            for a in stale if a["slug"] not in needed]
+    return keep, left
+
+
 def _risk(scenes: list[dict], anchors: list[dict]) -> dict:
     """Read the prompts this run would actually send, the way the engine will.
 
@@ -430,7 +458,7 @@ def plan(project: dict, scene_numbers: list[int] | None = None,
             })
 
     price = engines.price_per_image(engine_key, params)
-    anchors = cast_plan["render"]
+    anchors, unused = _anchors_for(cast_plan["render"], to_render, scene_numbers)
     billable = len(to_render) + len(anchors)
     return {
         "engine": engine_key,
@@ -445,7 +473,8 @@ def plan(project: dict, scene_numbers: list[int] | None = None,
         "consistency_active": using_cast,
         "ref_model": engines.ref_model(engine_key) if using_cast else "",
         "anchors": anchors,
-        "anchors_skip": cast_plan["skip"],
+        "anchors_skip": cast_plan["skip"] + unused,
+        "anchors_unused": unused,
         "anchor_count": len(anchors),
         # What a safety classifier is likely to make of the prompts this run
         # would send. Free, local, and never a refusal: see screening.py.
