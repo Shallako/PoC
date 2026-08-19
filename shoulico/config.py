@@ -48,6 +48,45 @@ FALLBACK_CLAUDE_MODEL = "claude-sonnet-5"
 
 CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
+# --------------------------------------------------------------------------- #
+# How long to keep trying when Claude is busy
+#
+# A 529 is Anthropic's capacity, not our request and not the key: the model
+# never ran, so nothing is charged. It is also usually brief, which is why the
+# right answer is to wait rather than to fail -- the SDK's own retries are
+# sub-second and twice, which covers a blip and not a busy few minutes.
+#
+# These are here rather than in compiler.py because the page shows them. It says
+# how many attempts are left and how long the wait is, and a number typed into
+# the markup disagrees with the server the moment anyone changes it -- the same
+# reason MAX_STORY_CHARS is published rather than repeated.
+#
+# The whole ladder is: CLAUDE_ATTEMPTS tries on the requested model, then one on
+# FALLBACK_CLAUDE_MODEL, with CLAUDE_BACKOFF seconds between them. Raise the
+# backoff rather than the attempts if 529s are frequent -- retrying sooner into
+# a busy hour is what makes it busier.
+# --------------------------------------------------------------------------- #
+
+CLAUDE_ATTEMPTS = 4                    # tries on the requested model
+CLAUDE_BACKOFF = (3, 8, 20)            # seconds before attempts 2, 3, 4...
+CLAUDE_SDK_RETRIES = 2                 # the SDK's own fast retries inside each
+# Anthropic may send its own Retry-After. Honoured, but capped: a call parked
+# for ten minutes is indistinguishable from a hung one, and the user is watching
+# a disabled button.
+CLAUDE_RETRY_AFTER_MAX = 120.0
+
+
+def claude_patience_seconds() -> float:
+    """Worst-case time spent *waiting* between attempts, excluding the calls.
+
+    What the page quotes as "it will keep trying for up to N seconds". Not the
+    total wall clock -- a segmentation call is itself ~100s -- but it is the part
+    that is pure waiting, and the part these constants control.
+    """
+    ladder = CLAUDE_ATTEMPTS - 1 + (1 if FALLBACK_CLAUDE_MODEL else 0)
+    steps = [CLAUDE_BACKOFF[min(i, len(CLAUDE_BACKOFF) - 1)] for i in range(ladder)]
+    return float(sum(steps))
+
 SEGMENT_MODEL = DEFAULT_CLAUDE_MODEL
 SEGMENT_EFFORT = "high"
 

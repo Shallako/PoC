@@ -93,6 +93,15 @@
   /* The pre-flight read of the style direction. Sits under the field rather
      than in the alert strip at the top: it is about this box, and an alert
      that has scrolled out of sight next to the box it describes is no use. */
+  /* The 529 wait. Same shape as the style screen: it belongs to the button
+     that is currently disabled, not to the alert strip at the top of the page. */
+  .wait{margin-top:10px;font-size:13px;line-height:1.5}
+  .wait .warn{padding:9px 11px;margin:0}
+  .wait .why{display:block;margin-top:4px;color:var(--slate-600)}
+  .wait .bar{height:3px;border-radius:999px;background:var(--amber-200);
+    margin-top:8px;overflow:hidden}
+  .wait .bar i{display:block;height:100%;background:var(--amber);
+    transition:width .25s linear}
   .screen{margin-top:8px;font-size:12.5px;line-height:1.45}
   .screen .warn,.screen .note{padding:8px 10px;margin:0 0 6px}
   .screen .fix{display:block;margin-top:4px;color:var(--slate-600)}
@@ -196,6 +205,7 @@
       <button class="btn" id="segmentBtn" data-i18n="s1.segment">Segment with Claude →</button>
       <button class="btn ghost hidden" id="cancelSegmentBtn" data-i18n="s1.cancel">Cancel</button>
       <span class="muted" id="segmentMsg" style="margin-left:10px"></span>
+      <div id="segmentWait"></div>
     </div>
   </section>
 
@@ -242,6 +252,7 @@
           <button class="btn ghost hidden" id="cancelNarrBtn" data-i18n="s2.narr.cancel">Cancel</button>
         </div>
       </div>
+      <div id="narrationWait"></div>
       <div class="muted" id="narrTotal" style="margin-top:8px"></div>
     </div>
 
@@ -560,6 +571,18 @@ const DYN = {
   "clip.notes": "{name} — what is proven and what is not",
   "help.clip": "Renderful has no model that does both: an image engine and a video model are separate ids, so this pairs one with the other and stores both sets of settings on the project. The image half works today, end to end. The video half is declared — the model id, frame, length and audio options are real and validated — but nothing sends them yet, so choosing this engine costs exactly what its images cost, about {price} per clip if and when clips are wired. The audio controls in particular are read off how the model behaves, not off a published schema, so prove one clip before trusting a batch to them.",
   "help.styleHint": "One instruction for the whole set, not for a single image. Claude folds it into the shared style block — art style, period, palette, recurring characters, wardrobe — and that block is appended to every scene prompt and to every character portrait, which is what keeps the images looking like one series instead of {count} unrelated pictures. It is read when you press Segment, so editing it afterwards changes nothing on its own: either segment again, or edit the style block directly on step 2, which is faster and does not rewrite your prompts.\n\nBecause it reaches every image, a phrase the image service refuses here does not spoil one picture — it fails the entire batch, and you are billed for all of it. The four things that get refused, in the order they actually happen:\n\n• Anyone who might be a minor. \"boy\", \"girl\", \"kid\", \"teen\", a school, or an age under 18. Leaving age unsaid is not safe either: the service guesses, and it guesses cautiously. If everyone is an adult, write it — \"two men in their twenties\".\n\n• Clothing described by its absence. \"no pants\", \"shirtless\", \"without a jacket\". You mean summer clothes; it reads an instruction to undress somebody. Write what they wear instead — \"khaki shorts and canvas sneakers\" — which is also the phrasing that renders better, since these models handle \"no\" badly.\n\n• Real people by name or likeness, and trademarked characters — Disney, Marvel, Ghibli. Describe the look you want in your own words.\n\n• Graphic injury. Imply it: aftermath, reaction, an object.\n\nThe box checks itself as you type and says so before you spend anything. It is a heuristic, not the service's own filter, so it can miss things and can be over-cautious — it never stops you, it only warns.",
+  "wait.overloaded.h": "Claude is busy — waiting to try again",
+  "wait.overloaded": "Anthropic is at capacity right now. This is their load, not your key and not your story, and a request they turn away is never charged.",
+  "wait.rate_limit.h": "Your Anthropic account is being rate limited",
+  "wait.rate_limit": "The key is good and nothing was charged — there have just been too many requests too quickly. Check the limits on your account at console.anthropic.com if this keeps happening.",
+  "wait.transient.h": "Could not reach Claude — waiting to try again",
+  "wait.transient": "The connection failed rather than the request. Nothing was charged.",
+  "wait.retry": "Trying again in {seconds}s · attempt {attempt} of {of}",
+  "wait.retry.now": "Trying again now · attempt {attempt} of {of}",
+  "wait.patience": "It keeps trying for about {patience}s of waiting in total, then stops and tells you. Cancel is safe at any point — nothing has been spent.",
+  "wait.fallback": "{wanted} stayed busy, so {used} will answer this one instead.",
+  "wait.attempt": "attempt {attempt} of {of}",
+
   "screen.title": "This style direction may be refused by the image service",
   "screen.note.title": "Worth knowing before you segment",
   "screen.again": "Press Segment again to go ahead anyway.",
@@ -1617,6 +1640,103 @@ $("consistency").addEventListener("change", async (e) => {
   }
 });
 
+// ------------------------------------------------------------ the Claude wait
+//
+// A 529 is Anthropic at capacity: the model never ran, so nothing is charged,
+// and it is usually brief -- which is why the server waits and tries again
+// rather than failing. The whole ladder happens inside the one POST that
+// started it, so from here it looked exactly like a very slow answer: a
+// disabled button and "Claude is reading the story..." for a minute or more,
+// with no way to tell working from waiting.
+//
+// So while a Claude phase is running, this polls what that call is doing and
+// says it. Every number it quotes comes from the server -- the attempt count
+// and the backoff are config.py's, and a copy typed in here would count down to
+// a retry that had already happened.
+
+const WAIT_POLL_MS = 1000;
+const CLAUDE_PHASES = {
+  // `msg` is the line beside the button. It says "Claude is reading the
+  // story..." which is true while a call is open and a small lie while the
+  // ladder is waiting out a 529, so the wait takes it over.
+  segment: { box: "segmentWait", timer: null, msg: "segmentMsg", busy: "segmenting" },
+  narration: { box: "narrationWait", timer: null },
+};
+
+function startClaudeWatch(phase) {
+  const slot = CLAUDE_PHASES[phase];
+  if (!slot || slot.timer) return;
+  const tick = async () => {
+    try {
+      const state = await api(`/projects/${P.id}/claude/${phase}`);
+      drawWait(slot.box, state);
+      if (slot.msg) {
+        $(slot.msg).textContent =
+          state && state.phase === "waiting" ? "" : t(slot.busy);
+      }
+    } catch (err) {
+      // The phase's own request carries the real error; a failed poll must not
+      // add a second, louder one about itself.
+    }
+  };
+  tick();
+  slot.timer = setInterval(tick, WAIT_POLL_MS);
+}
+
+function stopClaudeWatch(phase) {
+  const slot = CLAUDE_PHASES[phase];
+  if (!slot) return;
+  clearInterval(slot.timer);
+  slot.timer = null;
+  $(slot.box).innerHTML = "";
+}
+
+function drawWait(boxId, state) {
+  const box = $(boxId);
+  // Attempt one, going fine: the button already says what is happening, and a
+  // second line saying it again is noise. This box appears when something has
+  // gone wrong and stays until it has not.
+  if (!state || !state.running || state.phase !== "waiting") {
+    if (state && state.running && state.attempt > 1 && state.phase === "calling") {
+      box.className = "wait";
+      box.innerHTML = `<div class="note">${escapeHtml(
+        tf("wait.attempt", { attempt: state.attempt, of: state.of }))}` +
+        fallbackLine(state) + `</div>`;
+      return;
+    }
+    box.innerHTML = "";
+    return;
+  }
+
+  const reason = ["overloaded", "rate_limit"].includes(state.reason)
+    ? state.reason : "transient";
+  const left = Math.max(0, Math.ceil(state.retry_in ?? state.seconds ?? 0));
+  const line = left > 0
+    ? tf("wait.retry", { seconds: left, attempt: state.attempt, of: state.of })
+    : tf("wait.retry.now", { attempt: state.attempt, of: state.of });
+  // How much of this particular wait has run, so the bar means something rather
+  // than being decoration: full at the start of the pause, empty when it fires.
+  const total = state.seconds || left || 1;
+  const done = Math.min(100, Math.max(0, ((total - left) / total) * 100));
+  const patience = STATUS && STATUS.claude_patience;
+
+  box.className = "wait";
+  box.innerHTML =
+    `<div class="warn"><strong>${escapeHtml(t(`wait.${reason}.h`))}</strong>` +
+    `<span class="why">${escapeHtml(t(`wait.${reason}`))}</span>` +
+    `<span class="why"><strong>${escapeHtml(line)}</strong></span>` +
+    fallbackLine(state) +
+    (patience ? `<span class="why">${escapeHtml(
+        tf("wait.patience", { patience: Math.round(patience) }))}</span>` : "") +
+    `<div class="bar"><i style="width:${done.toFixed(0)}%"></i></div></div>`;
+}
+
+function fallbackLine(state) {
+  if (!state.falling_back) return "";
+  return `<span class="why">${escapeHtml(tf("wait.fallback", {
+    wanted: STATUS.claude_model, used: state.model || STATUS.claude_fallback }))}</span>`;
+}
+
 // ------------------------------------------------------- style direction check
 //
 // The style direction reaches every image: Claude folds it into the shared
@@ -1710,6 +1830,7 @@ $("segmentBtn").onclick = async () => {
   }
   const btn = $("segmentBtn"); btn.disabled = true; $("segmentMsg").textContent = t("segmenting");
   $("cancelSegmentBtn").classList.remove("hidden");
+  startClaudeWatch("segment");
   try {
     P = await api(`/projects/${P.id}`, "PATCH", {
       name: $("projName").value, story: $("story").value,
@@ -1726,7 +1847,10 @@ $("segmentBtn").onclick = async () => {
     }
     await applyLanguage();
   } catch (err) { alertBox(err); $("segmentMsg").textContent = ""; }
-  finally { btn.disabled = false; $("cancelSegmentBtn").classList.add("hidden"); }
+  finally {
+    stopClaudeWatch("segment");
+    btn.disabled = false; $("cancelSegmentBtn").classList.add("hidden");
+  }
 };
 
 $("saveScenesBtn").onclick = async () => {
@@ -1749,6 +1873,7 @@ $("narrBtn").onclick = async () => {
   clearAlerts();
   const btn = $("narrBtn"); btn.disabled = true; btn.textContent = t("writing");
   $("cancelNarrBtn").classList.remove("hidden");
+  startClaudeWatch("narration");
   try {
     P = await api(`/projects/${P.id}`, "PATCH", { scenes: collectScenePatch(), style_profile: $("styleProfile").value });
     P = await api(`/projects/${P.id}/narration`, "POST", {
@@ -1758,6 +1883,7 @@ $("narrBtn").onclick = async () => {
     refreshTtsPlan();
   } catch (err) { alertBox(err); }
   finally {
+    stopClaudeWatch("narration");
     btn.disabled = false; btn.textContent = t("s2.write");
     $("cancelNarrBtn").classList.add("hidden");
   }
