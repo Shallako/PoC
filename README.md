@@ -270,7 +270,8 @@ projects/<project-id>/
   export/          flattened <project>_<NNN>_<slug>.<jpg|png> + .txt + .mp3
                    + <project>_full-voiceover.txt + <project>_captions.srt/.vtt
                    + <project>_timing.csv + <project>_video.mp4 + manifest.json
-engines.json       engine, voice and video registries -- edit to add a model
+engines.json       engine, voice and video registries -- written from
+                   engines.py on first run; edit to add a model
 i18n/<code>.json   cached interface translations, one file per language
 ```
 
@@ -906,6 +907,15 @@ text-to-image counterparts. An engine with no `ref` block simply cannot hold a
 face steady, and the UI says so instead of offering a switch that would be
 refused on save.
 
+**`engines.json` is not in the repository.** `engines.py` holds
+`DEFAULT_REGISTRY` and writes the file from it the first time the app loads, so
+a fresh clone regenerates it exactly and nothing is lost by its absence. It is
+also the file you are invited to edit, and the app rewrites it in place when a
+shipped entry's `schema_version` moves -- tracked, that showed up as a
+working-tree change nobody made, and every local edit was a conflict waiting for
+the next pull. Change what ships by changing `engines.py`; change what *this*
+machine uses by changing `engines.json`.
+
 A shipped engine that is missing from your `engines.json` is added on next load;
 entries already in the file are never touched, so renaming or re-pricing one is
 safe and survives an upgrade. The one exception is *additive*: a capability block
@@ -1012,7 +1022,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 403 offline tests, free
+    .venv\Scripts\python -m pytest             # 404 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium

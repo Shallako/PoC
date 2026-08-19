@@ -18,6 +18,16 @@ projects/
 # Cached interface translations -- regenerated on demand, one Claude call each
 i18n/
 
+# The engine, voice and video registry. engines.py holds DEFAULT_REGISTRY and
+# writes this file from it on first run, so a fresh clone regenerates it exactly
+# -- the tracked copy was byte-for-byte the generated one. Tracking it made two
+# problems: the app rewrites it in place when a shipped entry's schema_version
+# moves, which showed up as a working-tree change nobody made, and it is the
+# file you are invited to edit to add an engine, so every local edit was a
+# conflict waiting for the next pull. The registry lives in engines.py; this is
+# its cache.
+engines.json
+
 # The browser check's toolchain. package.json and the lockfile are tracked so
 # the versions are reproducible; the 200MB of downloaded node and browser is not.
 tests/browser/node_modules/

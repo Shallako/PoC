@@ -199,6 +199,22 @@ def test_the_clip_estimate_follows_resolution_and_never_reads_low(client):
     assert engines.price_per_clip("seedream-5.0-pro") == 0.0
 
 
+def test_a_missing_engines_json_is_regenerated_exactly(client):
+    """Why it is not in the repository.
+
+    The tracked copy was byte-for-byte what engines.py writes, so it added
+    nothing a fresh clone could not produce -- while the app rewrites the file
+    in place whenever a shipped entry's schema_version moves, which showed up as
+    a working-tree change nobody made. If this ever stops holding, engines.json
+    carries something only the repository has, and untracking it lost it.
+    """
+    import json
+    assert not config.ENGINES_FILE.exists()       # the sandbox starts clean
+    client.get("/api/engines")
+    written = json.loads(config.ENGINES_FILE.read_text(encoding="utf-8"))
+    assert written == engines.DEFAULT_REGISTRY
+
+
 def test_a_hand_written_engines_json_gains_new_engines_without_losing_edits(client):
     """The file exists, so defaults are never consulted again -- unless we add them."""
     import json
