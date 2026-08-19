@@ -71,6 +71,21 @@ class FatalAPIError(RuntimeError):
     """Out of credit / rate limited / bad key -- retrying will not help."""
 
 
+# Every error this module raises carries what it was, as an attribute rather
+# than only in its message. The activity ledger has to classify these, and
+# classifying by regex over our own error strings would break silently the first
+# time one of them was reworded.
+def _tagged(exc: Exception, **marks) -> Exception:
+    for name, value in marks.items():
+        setattr(exc, name, value)
+    return exc
+
+
+def _http(code: int, msg, fatal: bool = False) -> Exception:
+    cls = FatalAPIError if fatal else RuntimeError
+    return _tagged(cls(f"HTTP {code}: {msg}"), status=code)
+
+
 def _request(url: str, key: str, payload: dict | None = None, timeout: int = 60) -> dict:
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     req = urllib.request.Request(
@@ -123,16 +138,17 @@ def api_call(url: str, key: str, payload: dict | None = None) -> dict:
 
             if e.code == 429 and not spent:
                 if attempt == HTTP_RETRIES:
-                    raise FatalAPIError(
-                        f"HTTP 429 after {HTTP_RETRIES} attempts: {msg}") from None
-                last = RuntimeError(f"HTTP 429: {msg}")
+                    raise _tagged(
+                        FatalAPIError(f"HTTP 429 after {HTTP_RETRIES} attempts: {msg}"),
+                        status=429) from None
+                last = _http(429, msg)
                 delay = _retry_after(e) or RATE_LIMIT_BACKOFF_SECONDS * attempt
             elif e.code in (401, 402, 403) or spent:
-                raise FatalAPIError(f"HTTP {e.code}: {msg}") from None
+                raise _http(e.code, msg, fatal=True) from None
             elif 400 <= e.code < 500 and e.code != 408:
-                raise RuntimeError(f"HTTP {e.code}: {msg}") from None
+                raise _http(e.code, msg) from None
             else:
-                last, delay = RuntimeError(f"HTTP {e.code}: {msg}"), None
+                last, delay = _http(e.code, msg), None
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
             last, delay = e, None
         if attempt < HTTP_RETRIES:
@@ -184,7 +200,7 @@ def wait_for(gen_id: str, key: str, should_stop=None, on_state=None, *,
     deadline = time.time() + timeout
     while True:
         if should_stop is not None and should_stop():
-            raise RuntimeError("aborted")
+            raise _tagged(RuntimeError("aborted"), aborted=True)
         status = api_call(f"{RENDERFUL_API_BASE}/generations/{gen_id}", key)
         state = status.get("status")
         if state == "completed":
@@ -194,7 +210,9 @@ def wait_for(gen_id: str, key: str, should_stop=None, on_state=None, *,
         if on_state:
             on_state(state)
         if time.time() >= deadline:
-            raise RuntimeError(f"timed out after {timeout}s waiting for {gen_id}")
+            raise _tagged(
+                RuntimeError(f"timed out after {timeout}s waiting for {gen_id}"),
+                timed_out=True)
         time.sleep(interval)
 
 

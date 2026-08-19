@@ -27,6 +27,9 @@ Exit status is 0 when every check passes. It asserts:
 * step 1 keeps the story and the image count across a settings redraw;
 * step 2 keeps a scene edit, the focus and the caret across a poll redraw;
 * the style block survives the same;
+* the style direction shows its refusal warning, names what to write instead,
+  clears when the advice is followed, stops Segment once and then lets it
+  through, and re-arms when the text is edited;
 * both Claude-phase cancel buttons exist and are hidden while idle;
 * the page script carries its CSP nonce;
 * nothing lands in the console — a CSP violation shows up here and nowhere else.

@@ -258,6 +258,8 @@ spend money.
 projects/<project-id>/
   project.json     story, language, style block, cast, scenes, prompts, narration, params, spend
   manifest.json    one record per asset: engine, seed, params, exact prompt sent, cost
+  activity.jsonl   one line per business event -- including the ones that cost
+                   money and produced nothing, which manifest.json cannot hold
   cast/            <project>_cast_<slug>_v<VV>.<jpg|png>  -- one reference portrait
                    per recurring character; inputs to the story, not frames of it
   images/          <project>_<NNN>_<slug>_v<VV>[_seed<SEED>].<jpg|png>
@@ -343,6 +345,150 @@ story's own detected language, which is the point of segmenting in it. Video
 models that advertise "native audio" are not used for this -- they invent
 ambience and dialogue from the image prompt and cannot be handed an approved
 script, so pictures move and TTS speaks.
+
+**What a story actually cost.** `manifest.json` is a good provenance record and
+it has one expensive blind spot: it only records successes. A generation that was
+billed and produced nothing -- a 451 content rejection, a download that died
+after the picture was made, a run cancelled after submission -- left no trace
+anywhere, and `project.json` kept a one-line detail per scene until the next
+attempt overwrote it. So the events that cost money and produced nothing were
+the only events not written down.
+
+`activity.jsonl` is the ledger that closes that. One JSON object per line, one
+line per business event, appended as it happens:
+
+    {"ts":"...","event":"attempt","kind":"image","scene":3,"outcome":"failed",
+     "stage":"poll","generation_id":"gen-3","estimate":0.09,"latency_ms":16, ...}
+    {"ts":"...","event":"render.finished","run_id":"df41719b","attempts":6,
+     "by_outcome":{"ok":5,"failed":1},"billed":0.29,"wasted":0.09}
+
+The line is written **when the attempt is made, not when it succeeds**, so a
+failure is as legible as a win -- and the context manager that opens it writes a
+line even if the code inside forgets to say how it ended, because a billable call
+that leaves no trace is the one thing this cannot tolerate.
+
+`stage` is what makes the money honest. An attempt that got past `submit` had a
+generation running, so it was billed whatever happened next; one that failed *at*
+submit with a connection error never reached Renderful and was not. A 451 counts
+as billed, because in this repo's history it was. `GET /api/projects/<id>/activity`
+returns the events plus the reconciliation:
+
+| Figure | What it answers |
+|---|---|
+| `estimated` vs `billed` | how close the pre-flight quote was |
+| **`wasted`** | money spent on attempts that produced no asset |
+| `waste_ratio` | that as a fraction of everything billed |
+| `unpriced_attempts` | billed calls that never reported a cost -- how wrong the above can be |
+| `claude_input_tokens` / `claude_output_tokens` | Claude, counted in tokens |
+
+Claude is deliberately kept out of the dollar columns: there is no token price
+table in this app, and inventing one so the money column looked complete would
+make every figure beside it quietly wrong. What its lines do carry is the thing
+that had no record at all -- which model *answered*, whether the ladder fell back
+from Opus to Sonnet, and how many tokens it thought with. Effort is billed at the
+output rate, so `output_tokens` is the number that moves when one of the effort
+constants in `config.py` changes.
+
+**The style direction is read before anything is spent.** The style direction on
+step 1 is the highest-leverage text in the app and the easiest to get wrong.
+Claude folds it into the shared style block, and that block is appended to every
+scene prompt *and* every character portrait — so a phrase the image service
+refuses there does not spoil one picture, it fails the entire batch, and the
+whole batch is billed. That is not hypothetical: this repo's own `mv-boston`
+went four rounds of sixteen-of-sixteen refused, **$2.88 for no images**, on a
+direction ending
+
+    ..., no pants or jacket, summer outfits
+
+`story_chars` is 4327 in the activity log for all four failures and for the two
+runs that later worked, so the story was never the problem. Two things about that
+phrase generalise. "no pants" is a *negative wardrobe instruction*: it was written
+to mean summer clothes and reads as an instruction to undress somebody. And a
+cast with no age stated anywhere leaves the classifier to guess, which it does
+cautiously. Neither half is reliably refused alone; together they are the most
+refused pattern in image generation there is.
+
+So the box screens itself as you type, and Segment stops once before spending
+anything:
+
+    This style direction may be refused by the image service
+    ┌──────────────────────────────────────────────────────────────┐
+    │ This asks for clothing to be removed or absent ( no pants ). │
+    │ Read literally — which is how a classifier reads it — that   │
+    │ is a request for an undressed subject.                       │
+    │ Say what they are wearing, not what they are not. "no pants" │
+    │ reads as an instruction to undress somebody; "khaki shorts   │
+    │ and canvas sneakers" gets you the same summer picture and    │
+    │ passes.                                                      │
+    └──────────────────────────────────────────────────────────────┘
+    This text is appended to every scene prompt and every character
+    portrait, so a refusal fails the whole batch — about $1.08.
+
+Every finding names what it matched and what to write instead, because a warning
+with no way forward is a wall. The rules are in `screening.py`: minors by word or
+by age, wardrobe described by its absence, the two together, graphic injury, the
+likeness of a real person, trademarked characters, and — as a note rather than a
+warning — telling the engine what *not* to draw, which these models are bad at.
+Suppressing text is the one negation exempted, because it works and this app's
+own prompts rely on it.
+
+It is a heuristic, not the service's own classifier, so it **never blocks**: the
+first press of Segment stops and explains, the second goes ahead, and editing the
+text re-arms it. `POST /api/screen` is the same check, free and attached to no
+project. Half of `tests/test_screening.py` is phrases that must *not* trip it —
+a check that cries wolf on ordinary art direction gets ignored, and then it is
+worse than nothing.
+
+**Why a prompt failed, said once.** A run that is refused is usually refused
+whole: one story that breaks a content rule breaks it in every scene built from
+it. Fourteen identical rows saying `HTTP 451` is fourteen copies of one problem,
+so the ledger says it once.
+
+Every failed attempt still gets its own row -- it was billed, so it is counted --
+and every row carries a `reason` slug (`content-policy`, `out-of-credit`,
+`bad-key`, `rate-limited`, `engine-failed`, `timed-out`, `stopped`,
+`bad-request`, `network`) to group the money by cause. But only the **first** row
+of each distinct (reason, kind) in a run carries the explanation; the rest carry
+`repeat: N` and nothing else. The same block is printed to stdout exactly once:
+
+    11:43:02  anchor, the-cousin content-policy: Prompt references minors.
+    11:43:02      The service judged the words, not the picture, so sending the same
+                  text again fails again and bills again. What to edit: this
+                  character's description on step 2. A reference portrait is built
+                  from the description alone -- no scene text reaches it.
+    11:43:02      sent: A broad man of thirty-one in a red baseball cap ...
+
+`reason` and `kind` are both in the key because the fix depends on both. A scene
+prompt is the scene body, the shared style block and the descriptions of the
+characters it names, concatenated; a character portrait is the description
+alone. Telling somebody to edit a scene when the offending words are in a cast
+description wastes the next render too. `render.finished` rolls the same thing up
+per run:
+
+    "failures": [
+      {"reason":"content-policy","kind":"image","count":12,"scenes":[1..12],"hint":"..."},
+      {"reason":"content-policy","kind":"anchor","count":2,
+       "characters":["the-cousin","the-narrator"],"hint":"..."}
+    ]
+
+**What of the story goes in.** Prompts and narration lines are recorded as a
+SHA-256 fingerprint -- enough to correlate two rows or match one to the manifest,
+useless to anyone who picks up the file. Keys and asset URLs are never written.
+
+There is one deliberate exception: on a **content rejection** the prompt itself
+is written, once, on that first explaining row. A hash tells you two rows match;
+it cannot tell you which words to change, and on a 451 that is the entire
+question -- "edit something in one of three places" is not a diagnosis. Set
+`LOG_REJECTED_PROMPTS = False` in `config.py` to keep story text out of the file
+completely, at the cost of having to guess; `LOG_PROMPT_CHARS` bounds how much is
+kept.
+
+The file lives inside the project directory, so deleting a project deletes its
+ledger with it, and it rotates at 1 MB keeping three older files.
+
+Everything above is Tier 0 of `docs/observability.md`, which reasons through why
+a single-user local app's observability problem is spend correctness and upstream
+drift rather than latency or scale, and what the later tiers would be worth.
 
 **The interface follows the story.** Once a language is detected, the page posts
 its own English strings to `POST /api/ui/strings` and redraws itself in that
@@ -746,7 +892,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 298 offline tests, free
+    .venv\Scripts\python -m pytest             # 363 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium

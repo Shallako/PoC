@@ -39,10 +39,15 @@ class Speech:
 
 
 def synthesize(text: str, key: str, model: str, params: dict, *,
-               should_stop=None, on_state=None) -> Speech:
+               should_stop=None, on_state=None, on_submit=None) -> Speech:
     """Submit one line, wait for it, download it, measure it.
 
     Raises ParamError before spending anything if the text cannot be sent.
+
+    `on_submit` is called with the generation id the moment the request is
+    accepted. Everything after that point is billed whether or not this function
+    returns, so the caller's activity record needs to know the id even when the
+    poll or the download is what failed.
     """
     line = (text or "").strip()
     if not line:
@@ -58,6 +63,8 @@ def synthesize(text: str, key: str, model: str, params: dict, *,
     gen_id = created.get("id")
     if not gen_id:
         raise RuntimeError(f"no generation id in response: {created}")
+    if on_submit is not None:
+        on_submit(gen_id)
 
     status_doc = renderful.wait_for(
         gen_id, key,

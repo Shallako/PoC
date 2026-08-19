@@ -13,9 +13,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
-from . import (captions, compiler, config, engines, i18n,
-               narration as narration_mod, orchestrator, security, store,
-               timeline, video)
+from . import (activity, captions, compiler, config, engines, i18n,
+               narration as narration_mod, orchestrator, screening, security,
+               store, timeline, video)
+
+# Done at import rather than in run.py: uvicorn --reload runs the app in a child
+# process that imports this module directly and never executes run.py, so a
+# handler installed there would vanish exactly when it is most wanted.
+activity.install_stdout_handler()
 
 app = FastAPI(title="Shoulico (local MVP)", docs_url="/api/docs", redoc_url=None)
 
@@ -34,6 +39,10 @@ class NewProject(BaseModel):
     story: str = ""
     scene_count: int = config.DEFAULT_SCENE_COUNT
     engine: str | None = None
+
+
+class ScreenRequest(BaseModel):
+    text: str = ""
 
 
 class ScenePatch(BaseModel):
@@ -315,6 +324,23 @@ def api_engines() -> dict:
     return engines.public_registry()
 
 
+@app.post("/api/screen")
+def api_screen(body: ScreenRequest) -> dict:
+    """Read a style direction the way an image engine's classifier will.
+
+    Deliberately free, stateless and attached to no project: it runs before the
+    story is sent to Claude, which is the last point at which finding a problem
+    costs nothing. Everything after it -- segmentation, then every scene prompt
+    and every character portrait carrying the same style block -- is billed.
+
+    It answers only for the text it is given. It is a heuristic, not the real
+    classifier, so nothing it returns blocks anything: see screening.py.
+    """
+    text = security.clean(body.text, security.LIMIT_STYLE)
+    findings = screening.screen(text)
+    return {"findings": findings, "worst": screening.worst(findings)}
+
+
 # --------------------------------------------------------------------------- #
 # Interface language (follows the story)
 # --------------------------------------------------------------------------- #
@@ -375,6 +401,8 @@ def api_create(body: NewProject) -> dict:
         raise HTTPException(400, f"The story exceeds {config.MAX_STORY_CHARS} characters.")
     project = store.create(body.name, body.story, engine=body.engine,
                            scene_count=body.scene_count)
+    activity.record(project["id"], "project.created", engine=project.get("engine"),
+                    story_chars=len(body.story), scene_count=body.scene_count)
     return _decorate(project)
 
 
@@ -503,6 +531,7 @@ def api_segment(pid: str, body: SegmentRequest) -> dict:
                 engine_name=eng.get("name", project["engine"]),
                 dialect_notes=eng.get("dialect", {}).get("notes", []),
                 prompt_language=prompt_lang,
+                pid=pid,
                 stop=stop,
             )
     except compiler.Cancelled:
@@ -563,7 +592,14 @@ def api_segment(pid: str, body: SegmentRequest) -> dict:
         proj["claude_model"] = result.get("model") or config.SEGMENT_MODEL
         proj["claude_fell_back"] = bool(result.get("fell_back"))
 
-    return _decorate(store.mutate(pid, apply))
+    updated = store.mutate(pid, apply)
+    activity.record(pid, "story.segmented",
+                    model=result.get("model"), fell_back=bool(result.get("fell_back")),
+                    scenes=len(updated.get("scenes") or []),
+                    cast=len(updated.get("cast") or []),
+                    language=(updated.get("language") or {}).get("code"),
+                    story_chars=len(project.get("story", "")))
+    return _decorate(updated)
 
 
 # --------------------------------------------------------------------------- #
@@ -641,6 +677,7 @@ def api_narration(pid: str, body: NarrationRequest) -> dict:
                 seconds_per_scene=int(settings.get("seconds_per_scene", 8)),
                 language=project.get("language"),
                 api_key=config.anthropic_key(),
+                pid=pid,
                 stop=stop,
             )
     except compiler.Cancelled:
@@ -662,6 +699,9 @@ def api_narration(pid: str, body: NarrationRequest) -> dict:
             if scene["n"] in lines:
                 scene["narration"] = lines[scene["n"]]
 
+    activity.record(pid, "narration.written", lines=len(lines),
+                    chars=sum(len(v) for v in lines.values()),
+                    seconds_per_scene=int(settings.get("seconds_per_scene", 8)))
     return _decorate(store.mutate(pid, apply))
 
 
@@ -835,10 +875,31 @@ def api_captions(pid: str, fmt: str):
 def api_export(pid: str, body: ExportRequest) -> dict:
     project = _load(pid)
     store.write_narration_files(pid, project)
-    return store.export(pid, project, flatten=body.flatten)
+    result = store.export(pid, project, flatten=body.flatten)
+    activity.record(pid, "export.written", flatten=body.flatten,
+                    files=len(result.get("files") or []),
+                    dir=result.get("dir"))
+    return result
 
 
 @app.get("/api/projects/{pid}/manifest")
 def api_manifest(pid: str) -> dict:
     _load(pid)
     return store.read_manifest(pid)
+
+
+@app.get("/api/projects/{pid}/activity")
+def api_activity(pid: str, limit: int = 200, run_id: str | None = None) -> dict:
+    """The business activity log: what happened, and what it cost.
+
+    The manifest next door answers "what exists"; this answers "what was spent,
+    including on the things that do not exist". `report` is the reconciliation
+    -- estimated against billed, and how much went on attempts that produced
+    nothing.
+    """
+    _load(pid)
+    limit = max(1, min(int(limit), 2000))
+    return {
+        "report": activity.report(pid),
+        "events": activity.read(pid, limit=limit, run_id=run_id),
+    }

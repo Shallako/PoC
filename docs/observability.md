@@ -1,8 +1,12 @@
 # Observability -- plan
 
-*Plan only, nothing built. Free and open-source components exclusively; licences
-are named because two of the obvious choices are AGPL and that matters the day
-this stops being a PoC.*
+*Free and open-source components exclusively; licences are named because two of
+the obvious choices are AGPL and that matters the day this stops being a PoC.*
+
+**Status: Tier 0 is built** -- `shoulico/activity.py`, `activity.jsonl` per
+project, `GET /api/projects/<id>/activity`, 40 tests in `tests/test_activity.py`.
+Everything from §4 down is still a plan. What was built differs from §3 in
+several places, all noted in place below.
 
 ---
 
@@ -42,7 +46,7 @@ a `detail` string per scene, and the next attempt overwrites it.
 So the first gap is not a tracing backend. It is that **the events which cost
 money and produced nothing are the only events not written down.**
 
-## 3. Tier 0 -- the ledger (no dependencies, highest value)
+## 3. Tier 0 -- the ledger (no dependencies, highest value) -- **BUILT**
 
 An append-only JSONL event log, written with the standard library's `logging` and
 a JSON formatter. No third-party package, nothing to run, nothing to keep alive.
@@ -66,7 +70,29 @@ Four deliberate choices:
 - **`run_id`** correlating every event of one batch, including the anchors that
   preceded the scenes.
 - **One append-only JSONL file**, greppable with what is already on the machine,
-  rotated by size with `RotatingFileHandler`.
+  rotated by size.
+
+*Two departures from the above, made while building it.* The file is **per
+project**, inside the project directory, rather than one global log: deleting a
+project then takes its ledger with it, which is the right default for something
+holding a record of what somebody's story cost. And the append is done directly
+under a lock rather than through `logging`'s `RotatingFileHandler` -- a handler
+per project holds an open file handle, and `store.delete()` calls `shutil.rmtree`,
+which on Windows fails outright while a handle is open.
+
+*Added after the first real incident.* A run of 14 was refused 451 end to end --
+`$0.72`, no images -- and the ledger recorded it correctly and unreadably: 14
+identical rows, no statement of which of the three texts feeding a prompt had
+broken the rule. So an attempt is now classified into a `reason` slug, the first
+of each (reason, kind) in a run carries the explanation and the rejected text
+while the rest carry only a repeat count, and that one block also goes to stdout.
+Writing the rejected prompt is a deliberate exception to hashing everything,
+switched by `config.LOG_REJECTED_PROMPTS`; the reasoning is in the README.
+
+*Added while building it:* a `stage` field (`submit` / `poll` / `download` /
+`save`). Without it there is no way to separate "the request never reached them,
+so nothing was billed" from "it ran and we lost the result", and that separation
+is what stops `wasted` from being an overstatement.
 
 **Then one read-only report**: for a project or for everything, what was
 estimated, what was actually billed, where the two diverged, and how much was
@@ -227,7 +253,7 @@ leans on cost transparency, it is arguably the highest-value one.
 
 | Phase | Work | Effort | Deps |
 |---|---|---|---|
-| 0 | JSONL ledger + reconciliation report | 0.5 d | none |
+| 0 | JSONL ledger + reconciliation report -- **built** | 0.5 d | none |
 | 1 | Catalogue drift check | 0.5 d | none |
 | 2 | OTel spans, file exporter, opt-in OTLP | 1 d | otel-sdk |
 | 3 | In-app run history panel | 1 d | none |
