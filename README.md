@@ -346,6 +346,26 @@ models that advertise "native audio" are not used for this -- they invent
 ambience and dialogue from the image prompt and cannot be handed an approved
 script, so pictures move and TTS speaks.
 
+**The image count is published, not repeated.** `min="1" max="40" value="12"`
+used to be typed into the markup while `config.py` held `MAX_SCENE_COUNT` and
+`DEFAULT_SCENE_COUNT` and `/api/status` published neither -- two copies of a
+number where the copy that decides is not the copy on screen. `/api/status` now
+carries `max_scene_count` and `default_scene_count`, and the control takes both
+ends and its starting value from them. Before the status call has answered the
+box has no bounds rather than invented ones.
+
+`type="number"` with a `max` stops nothing being typed: the browser enforces it
+on a form submit, and this page never submits a form. So the range sits beside
+the label and turns red when it is passed, the way the story counter does.
+
+**And the count is refused rather than moved.** Asking for eighty images used to
+clamp the project to forty in silence while the box still said eighty -- so the
+same red counter on the same panel meant "this will be refused" for the story
+and "this will be quietly changed" for the count. Both refuse now, in the same
+words, and segmentation refuses before the first billed call rather than after
+it. `compiler` still clamps: that is the floor under the Claude call, and it has
+to hold a project saved before any of this existed.
+
 **Work that is out of date says so, at the door.** Both halves of the app are
 idempotent on their input, and both have always known when their output stopped
 matching it: `plan` will not skip a scene whose compiled prompt has moved,
@@ -992,7 +1012,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 394 offline tests, free
+    .venv\Scripts\python -m pytest             # 403 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium
