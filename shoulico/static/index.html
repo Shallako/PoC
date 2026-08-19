@@ -104,6 +104,8 @@
     transition:width .25s linear}
   .screen{margin-top:8px;font-size:12.5px;line-height:1.45}
   .screen .warn,.screen .note{padding:8px 10px;margin:0 0 6px}
+  .screen:empty{display:none}
+  #planRisk{margin-top:10px}
   .stale{margin:10px 0 0}
   .stale:empty{display:none}
   .stale .warn{margin:0}
@@ -316,6 +318,7 @@
         <div style="flex:0 0 auto"><button class="btn ghost" id="cancelBtn" data-i18n="s3.cancel">Cancel run</button></div>
       </div>
       <div id="planOut"></div>
+      <div id="planRisk" class="screen"></div>
     </div>
     <div class="panel">
       <h2 data-i18n="s3.gallery">Gallery</h2>
@@ -527,6 +530,14 @@ const DYN = {
   "plan.summary": "{count} to render, {skipped} already current. Estimated {estimate} at {price}/image.",
   "plan.nokey": "No Renderful API key found. Set RENDERFUL_API_KEY or put the key in api_key.txt, then restart.",
   "plan.unverified": "This engine is marked unverified in engines.json. Render one scene before committing to a batch.",
+  "risk.title": "These prompts may be refused by the image service",
+  "risk.note.title": "Worth knowing about these prompts",
+  "risk.scenes": "In scenes {list}.",
+  "risk.anchors": "In the reference portrait for {list}.",
+  "risk.everywhere": "In every prompt in this run — which means it is in the shared style block, not in any one scene.",
+  "risk.cost": "A refused generation is billed like any other, so this batch costs {estimate} whether the pictures arrive or not.",
+  "risk.fine": "This is a guess at what a classifier will do, not the classifier itself. Render anyway if you think it is wrong.",
+
   "plan.picked": "Rendering {picked} of the {offered} scenes below. The rest are left exactly as they are.",
   "plan.picked.none": "Nothing selected. Tick the scenes to render, or the box in the header for all of them.",
   "plan.th.pick": "include",
@@ -1360,6 +1371,9 @@ async function refreshPlan() {
     if (all.render.length) html += pickTable(all.render, PICK_RENDER, "plan.reason.");
     $("planOut").innerHTML = html;
     wirePicks("planOut", PICK_RENDER);
+    // Read from PLAN, not from the whole plan: unticking the risky scene is a
+    // real way to deal with this, and the panel has to agree that it worked.
+    renderRisk();
   } catch (err) { $("planOut").innerHTML = `<div class="err">${escapeHtml(err.message)}</div>`; }
 }
 
@@ -1952,6 +1966,55 @@ function fallbackLine(state) {
     wanted: STATUS.claude_model, used: state.model || STATUS.claude_fallback }))}</span>`;
 }
 
+// ------------------------------------------------------ the prompts themselves
+//
+// The step-1 check reads the style direction, which is the field the incident
+// came from -- but it is read once, before Claude has written anything. What is
+// actually submitted is the compiled prompt, and every part of it is editable
+// afterwards: the shared style block Claude writes, the scene body, the
+// character description. Any of them can put the phrase back.
+//
+// So this is the same reading, done on the strings that will really be sent, at
+// the last moment before they are paid for. It never blocks -- see screening.py
+// for why a pre-flight check that refused to let you fly would be worse than
+// the problem.
+
+function riskWhere(f, scenesInRun) {
+  const bits = [];
+  const scenes = f.scenes || [], anchors = f.anchors || [];
+  // A phrase in the shared style block is in every prompt at once. Listing all
+  // twelve scene numbers hides that; saying it is the block does not.
+  if (scenes.length && scenesInRun && scenes.length === scenesInRun)
+    bits.push(t("risk.everywhere"));
+  else if (scenes.length)
+    bits.push(tf("risk.scenes", { list: scenes.join(", ") }));
+  if (anchors.length) bits.push(tf("risk.anchors", { list: anchors.join(", ") }));
+  return bits.length ? `<span class="fix">${escapeHtml(bits.join(" "))}</span>` : "";
+}
+
+function renderRisk() {
+  const box = $("planRisk");
+  const risk = PLAN && PLAN.risk;
+  if (!risk || !risk.findings.length) { box.innerHTML = ""; return; }
+
+  const warned = risk.worst === "warn";
+  const rows = risk.findings
+    .map((f) => screenRow(f, riskWhere(f, PLAN.count))).join("");
+  // The number is the point, and only when a refusal is on the table: a
+  // refused generation is billed like any other, which is what made the
+  // incident cost $2.88 and produce nothing. A quality note risks no money and
+  // there is nothing to overrule, so it gets neither line.
+  const money_ = warned && PLAN.estimate
+    ? `<div class="muted">${escapeHtml(tf("risk.cost", {
+        estimate: money(PLAN.estimate) }))}</div>`
+      + `<div class="muted">${escapeHtml(t("risk.fine"))}</div>`
+    : "";
+  box.className = "screen";
+  box.innerHTML = `<div class="${warned ? "warn" : "note"}"><strong>` +
+    `${escapeHtml(t(warned ? "risk.title" : "risk.note.title"))}</strong></div>` +
+    rows + money_;
+}
+
 // ------------------------------------------------------- style direction check
 //
 // The style direction reaches every image: Claude folds it into the shared
@@ -1991,23 +2054,28 @@ function localised(key, fallback) {
   return SOURCE[key] !== undefined ? t(key) : String(fallback || "");
 }
 
+// One finding, rendered the same whether it came from the style direction at
+// step 1 or from a compiled prompt at step 3 -- same wording, same chips, same
+// suggestion. `where` is the part only the plan has: which scenes it is in.
+function screenRow(f, where) {
+  // Escaped first, then the placeholder filled with markup: the template's
+  // {matched} survives escaping, so the words the user actually typed are
+  // escaped exactly once and the chips around them are not.
+  const chips = (f.matched || [])
+    .map((m) => `<span class="hit">${escapeHtml(m)}</span>`).join(", ");
+  const said = fmt(escapeHtml(localised(`screen.${f.code}`, f.message)), { matched: chips });
+  const fix = escapeHtml(localised(`screen.${f.code}.fix`, f.suggestion));
+  return `<div class="${f.severity === "warn" ? "warn" : "note"}">` +
+         `${said}${where || ""}<span class="fix">${fix}</span></div>`;
+}
+
 function drawScreen() {
   const box = $("styleScreen");
   const findings = SCREEN.findings;
   if (!findings.length) { box.innerHTML = ""; return; }
 
   const warned = findings.some((f) => f.severity === "warn");
-  const rows = findings.map((f) => {
-    // Escaped first, then the placeholder filled with markup: the template's
-    // {matched} survives escaping, so the words the user actually typed are
-    // escaped exactly once and the chips around them are not.
-    const chips = (f.matched || [])
-      .map((m) => `<span class="hit">${escapeHtml(m)}</span>`).join(", ");
-    const said = fmt(escapeHtml(localised(`screen.${f.code}`, f.message)), { matched: chips });
-    const fix = escapeHtml(localised(`screen.${f.code}.fix`, f.suggestion));
-    return `<div class="${f.severity === "warn" ? "warn" : "note"}">` +
-           `${said}<span class="fix">${fix}</span></div>`;
-  }).join("");
+  const rows = findings.map((f) => screenRow(f)).join("");
 
   const price = pricePerImage();
   const count = Number($("sceneCount").value) || 0;

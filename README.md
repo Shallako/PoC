@@ -585,6 +585,50 @@ project. Half of `tests/test_screening.py` is phrases that must *not* trip it �
 a check that cries wolf on ordinary art direction gets ignored, and then it is
 worse than nothing.
 
+**And the prompts themselves are read, at the last moment before the money.**
+The check above is wired to one field, at step 1, before Claude has written
+anything. What is actually submitted is the *compiled* prompt, and every part of
+it is editable afterwards: the shared style block Claude writes from that
+direction, the scene body, the character description. Any of them can put back
+exactly the phrase the step-1 check exists to catch, and none of them was ever
+looked at again.
+
+So `plan` reads the strings it is about to send -- every scene prompt and every
+character portrait -- and the answer rides along with the estimate, above the
+spend button:
+
+    ┌────────────────────────────────────────────────────────────────┐
+    │ These prompts may be refused by the image service              │
+    │ This asks for clothing to be removed or absent (no pants).     │
+    │ Read literally — which is how a classifier reads it — that is  │
+    │ a request for an undressed subject.                            │
+    │ In every prompt in this run — which means it is in the shared  │
+    │ style block, not in any one scene.                             │
+    │ Say what they are wearing, not what they are not. "no pants"   │
+    │ reads as an instruction to undress somebody; "khaki shorts     │
+    │ and canvas sneakers" gets you the same summer picture.         │
+    │ A refused generation is billed like any other, so this batch   │
+    │ costs $0.54 whether the pictures arrive or not.                │
+    └────────────────────────────────────────────────────────────────┘
+
+Reading the compiled prompt rather than each source field is the point, not an
+implementation detail: the incident's phrasing was only dangerous *assembled* --
+undress language in the style direction, and no age anywhere in the story it was
+appended to. Screened field by field, neither half raises the compound finding.
+
+**Said once, not once per scene.** Every prompt in a set carries the same style
+block, so a phrase in the block is found twelve times over. Reported twelve
+times it reads as twelve problems and buries the one fact that matters, so a
+finding that covers the whole run says it is the block rather than listing every
+scene. It is grouped by finding, with the scenes and the portraits it appears in
+named underneath.
+
+It follows the tick boxes: leave the risky scene out and the warning goes with
+it, because unticking it is a real way to deal with this and the panel has to
+agree that it worked. Nothing is blocked, and a quality note gets neither the
+price of the batch nor an invitation to overrule it -- there is no money at risk
+and nothing to overrule.
+
 **Why a prompt failed, said once.** A run that is refused is usually refused
 whole: one story that breaks a content rule breaks it in every scene built from
 it. Fourteen identical rows saying `HTTP 451` is fourteen copies of one problem,
@@ -1048,7 +1092,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 414 offline tests, free
+    .venv\Scripts\python -m pytest             # 424 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium

@@ -37,6 +37,10 @@ Exit status is 0 when every check passes. It asserts:
 * the style direction shows its refusal warning, names what to write instead,
   clears when the advice is followed, stops Segment once and then lets it
   through, and re-arms when the text is edited;
+* the pre-spend prompt reading names the words, the scenes and the portraits it
+  found them in, calls a phrase that is in every prompt the style block rather
+  than listing every scene, quotes what a refusal would cost, tells a warning
+  from a note, and leaves the spend button enabled;
 * the 529 wait panel counts down, numbers the attempt, quotes the server's own
   patience, names a fallback, tells a rate limit from an outage, and stays quiet
   on a first attempt that is going fine;

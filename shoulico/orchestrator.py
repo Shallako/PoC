@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import (activity, captions, compiler, config, engines, narration,
-               renderful, store, timeline, tts, video)
+               renderful, screening, store, timeline, tts, video)
 from .naming import (anchor_stem, asset_stem, audio_stem, flat_stem,
                      video_stem)
 
@@ -331,6 +331,51 @@ def scene_tokens(project: dict, scene: dict, versions: dict) -> list[str]:
     return tokens[:cap]
 
 
+def _risk(scenes: list[dict], anchors: list[dict]) -> dict:
+    """Read the prompts this run would actually send, the way the engine will.
+
+    screening.py has been reading the style *direction* since the incident that
+    produced it -- one field, at step 1, before Claude is paid. That leaves the
+    text that is actually submitted unread. The shared style block Claude writes
+    from that direction is hand-editable at step 2; so is every scene body; so
+    is every character description. Any of them can put back exactly the phrase
+    the step-1 check was built to catch, and none of them was looked at again.
+
+    These are the compiled prompts, which is the last thing that happens before
+    the money does, and the strings themselves rather than what they were made
+    from.
+
+    Said once per finding, not once per scene. Every prompt in a set carries the
+    same style block, so a phrase in the block is found twelve times over -- and
+    reported twelve times it reads as twelve problems, burying the one fact that
+    matters, which is that it is in the block and not in any scene.
+    """
+    found: dict[str, dict] = {}
+
+    def note(finding: dict, key: str, value):
+        slot = found.setdefault(finding["code"], {
+            "code": finding["code"], "severity": finding["severity"],
+            "message": finding["message"], "suggestion": finding["suggestion"],
+            "matched": [], "scenes": [], "anchors": [],
+        })
+        for hit in finding["matched"]:
+            if hit not in slot["matched"]:
+                slot["matched"].append(hit)
+        if value not in slot[key]:
+            slot[key].append(value)
+
+    for row in scenes:
+        for finding in screening.screen(row.get("prompt", "")):
+            note(finding, "scenes", row["n"])
+    for row in anchors:
+        for finding in screening.screen(row.get("prompt", "")):
+            note(finding, "anchors", row["slug"])
+
+    findings = sorted(found.values(),
+                      key=lambda f: 0 if f["severity"] == screening.WARN else 1)
+    return {"worst": screening.worst(findings), "findings": findings}
+
+
 def plan(project: dict, scene_numbers: list[int] | None = None,
          force: bool = False) -> dict:
     """What a render would do, without doing it (FR-303 preview-before-spend)."""
@@ -402,6 +447,9 @@ def plan(project: dict, scene_numbers: list[int] | None = None,
         "anchors": anchors,
         "anchors_skip": cast_plan["skip"],
         "anchor_count": len(anchors),
+        # What a safety classifier is likely to make of the prompts this run
+        # would send. Free, local, and never a refusal: see screening.py.
+        "risk": _risk(to_render, anchors),
         "price_per_image": price,
         "estimate": round(price * billable, 4),
         "price_note": engines.engine(engine_key).get("price_note", ""),
