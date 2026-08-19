@@ -343,7 +343,10 @@ def plan(project: dict, scene_numbers: list[int] | None = None,
                  else {"render": [], "skip": [], "versions": {}})
     versions = cast_plan["versions"]
 
-    wanted = set(scene_numbers) if scene_numbers else {s["n"] for s in project["scenes"]}
+    # `is not None`, not truthiness: an empty selection means none of them. Read
+    # as "all of them" this is a batch nobody asked for, and it is billed.
+    wanted = (set(scene_numbers) if scene_numbers is not None
+              else {s["n"] for s in project["scenes"]})
     to_render, skipped = [], []
     for scene in sorted(project["scenes"], key=lambda s: s["n"]):
         if scene["n"] not in wanted:
@@ -919,7 +922,9 @@ def plan_audio(project: dict, scene_numbers: list[int] | None = None,
     voice_key, params = voice_settings(project)
     model = engines.model_id(voice_key, params)
 
-    wanted = set(scene_numbers) if scene_numbers else {s["n"] for s in project["scenes"]}
+    # Same as plan(): an empty selection is none of them, not all of them.
+    wanted = (set(scene_numbers) if scene_numbers is not None
+              else {s["n"] for s in project["scenes"]})
     to_speak, skipped, missing = [], [], []
     for scene in sorted(project["scenes"], key=lambda s: s["n"]):
         if scene["n"] not in wanted:

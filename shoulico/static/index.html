@@ -109,6 +109,8 @@
   .stale .warn{margin:0}
   .stale .why{display:block;margin-top:5px;color:var(--slate-600)}
   tr.stale-row td{background:var(--amber-50)}
+  input.pick{width:auto;margin:0}
+  th.pickcol,td.pickcol{width:28px;text-align:center}
   .screen .fix{display:block;margin-top:4px;color:var(--slate-600)}
   .screen .hit{font-family:ui-monospace,Menlo,Consolas,monospace;
     background:rgba(0,0,0,.05);border-radius:4px;padding:0 4px}
@@ -525,6 +527,10 @@ const DYN = {
   "plan.summary": "{count} to render, {skipped} already current. Estimated {estimate} at {price}/image.",
   "plan.nokey": "No Renderful API key found. Set RENDERFUL_API_KEY or put the key in api_key.txt, then restart.",
   "plan.unverified": "This engine is marked unverified in engines.json. Render one scene before committing to a batch.",
+  "plan.picked": "Rendering {picked} of the {offered} scenes below. The rest are left exactly as they are.",
+  "plan.picked.none": "Nothing selected. Tick the scenes to render, or the box in the header for all of them.",
+  "plan.th.pick": "include",
+  "plan.th.pick.one": "include scene {n}",
   "plan.th.n": "#",
   "plan.th.scene": "Scene",
   "plan.th.why": "Why",
@@ -1229,10 +1235,103 @@ function renderGallery() {
 }
 
 // ------------------------------------------------------------------ plan / render
+// ------------------------------------------------------------ picking a subset
+//
+// Which rows of a plan the next batch is actually for.
+//
+// null means all of them, which is the only thing this page could ask for
+// before: the batch button sent everything and the per-row arrow sent one. Four
+// scenes that failed meant four presses -- and start() refuses while a job is
+// running, so they were four jobs one after another. Serial, on a machine with
+// seven workers idle.
+//
+// A selection never holds a price. What a subset costs comes back from the same
+// plan endpoint the whole batch's does, because what a subset still drags in --
+// a character portrait two of the chosen scenes share -- is the server's
+// business, and arithmetic here would be a second opinion about money.
+function selectionOf(refresh) {
+  return {
+    picked: null,          // Set<number>, or null for "all of them"
+    offered: [],
+    numbers() { return this.picked ? [...this.picked].sort((a, b) => a - b) : null; },
+    has(n) { return this.picked ? this.picked.has(n) : true; },
+    // A selection cannot outlive the rows it named: rendering one, or flipping
+    // "force", changes what is on offer.
+    settle(rows) {
+      this.offered = rows.map((r) => r.n);
+      if (!this.picked) return;
+      this.picked = new Set([...this.picked].filter((n) => this.offered.includes(n)));
+      if (this.picked.size === this.offered.length) this.picked = null;
+    },
+    set(next) {
+      // "All of them" is not a subset -- collapsing it back to null keeps the
+      // request identical to the one the batch button has always sent.
+      this.picked = (next && next.size === this.offered.length) ? null : next;
+      refresh();
+    },
+    toggle(n, on) {
+      const set = this.picked ? new Set(this.picked) : new Set(this.offered);
+      if (on) set.add(n); else set.delete(n);
+      this.set(set);
+    },
+  };
+}
+
+const PICK_RENDER = selectionOf(() => refreshPlan());
+const PICK_SPEAK = selectionOf(() => refreshTtsPlan());
+let PLAN_ALL = null, TTS_PLAN_ALL = null;
+
+function pickedNote(sel) {
+  if (!sel.picked) return "";
+  return `<div class="${sel.picked.size ? "note" : "warn"}">${escapeHtml(
+    sel.picked.size
+      ? tf("plan.picked", { picked: sel.picked.size, offered: sel.offered.length })
+      : t("plan.picked.none"))}</div>`;
+}
+
+function pickTable(rows, sel, reasonPrefix) {
+  // Ticked only when every row is. A header box that reads "all" while three of
+  // seven are selected is the control lying about what the button will send;
+  // half-selected is indeterminate, which has no attribute and is set below.
+  return `<table><tr><th class="pickcol"><input type="checkbox" class="pick" data-pick-all
+      ${sel.picked ? "" : "checked"}
+      aria-label="${escapeHtml(t("plan.th.pick"))}"></th>
+    <th>${escapeHtml(t("plan.th.n"))}</th><th>${escapeHtml(t("plan.th.scene"))}</th>
+    <th>${escapeHtml(t("plan.th.why"))}</th></tr>` +
+    rows.map((r) => `<tr><td class="pickcol"><input type="checkbox" class="pick"
+        data-pick="${r.n}" ${sel.has(r.n) ? "checked" : ""}
+        aria-label="${escapeHtml(tf("plan.th.pick.one", { n: r.n }))}"></td>
+      <td>${r.n}</td><td>${escapeHtml(r.title)}</td>
+      <td class="muted">${escapeHtml(t(reasonPrefix + r.reason_key))}</td></tr>`).join("") +
+    `</table>`;
+}
+
+function wirePicks(boxId, sel) {
+  const box = $(boxId);
+  box.querySelectorAll("[data-pick]").forEach((el) => {
+    el.onchange = () => sel.toggle(Number(el.dataset.pick), el.checked);
+  });
+  const head = box.querySelector("[data-pick-all]");
+  if (head) {
+    head.indeterminate = !!(sel.picked && sel.picked.size);
+    head.onchange = () => sel.set(head.checked ? null : new Set());
+  }
+}
+
 async function refreshPlan() {
   if (!P || !P.scenes.length) return;
   try {
-    const plan = await api(`/projects/${P.id}/plan`, "POST", { force: $("forceAll").checked });
+    const force = $("forceAll").checked;
+    // The table is always the whole plan: ask for a subset and the rows for
+    // everything else come back missing, and there would be nothing left to
+    // tick to get them again.
+    const all = await api(`/projects/${P.id}/plan`, "POST", { force });
+    PLAN_ALL = all;
+    PICK_RENDER.settle(all.render);
+    const plan = PICK_RENDER.picked
+      ? await api(`/projects/${P.id}/plan`, "POST",
+                  { scenes: PICK_RENDER.numbers(), force })
+      : all;
     PLAN = plan;
     $("cbCount").textContent = plan.count;
     $("cbCost").textContent = money(plan.estimate);
@@ -1257,28 +1356,33 @@ async function refreshPlan() {
         names: plan.anchors.map((a) => a.name).join(", "),
       }))}</div>`;
     }
-    if (plan.render.length) {
-      html += `<table><tr><th>${escapeHtml(t("plan.th.n"))}</th><th>${escapeHtml(t("plan.th.scene"))}</th>
-        <th>${escapeHtml(t("plan.th.why"))}</th></tr>` +
-        plan.render.map((r) => `<tr><td>${r.n}</td><td>${escapeHtml(r.title)}</td>
-          <td class="muted">${escapeHtml(t("plan.reason." + r.reason_key))}</td></tr>`).join("") +
-        `</table>`;
-    }
+    html += pickedNote(PICK_RENDER);
+    if (all.render.length) html += pickTable(all.render, PICK_RENDER, "plan.reason.");
     $("planOut").innerHTML = html;
+    wirePicks("planOut", PICK_RENDER);
   } catch (err) { $("planOut").innerHTML = `<div class="err">${escapeHtml(err.message)}</div>`; }
 }
 
-async function doRender(scenes, force) {
-  const n = scenes ? scenes.length : Number($("cbCount").textContent);
-  const cost = scenes ? tf("confirm.cost", { cost: money(pricePerImage() * n) })
-                      : tf("confirm.cost", { cost: $("cbCost").textContent });
+async function doRender(scenes, force, planned) {
+  // `planned` says the costbar holds the plan for exactly this request, so the
+  // figure to confirm is already there and already includes any character
+  // portraits these scenes depend on. The per-scene arrow does not: it forces
+  // one scene the plan was not asked about, so it is still priced from the
+  // per-image figure, as it always was.
+  const n = planned ? Number($("cbCount").textContent) : scenes.length;
+  const cost = planned
+    ? tf("confirm.cost", { cost: $("cbCost").textContent })
+    : tf("confirm.cost", { cost: money(pricePerImage() * scenes.length) });
+  if (!n) return;
   const question = n === 1 ? tf("confirm.render.one", { cost })
                            : tf("confirm.render.many", { count: n, cost });
   if (!confirm(question)) return;
   try {
     clearAlerts();
     const res = await api(`/projects/${P.id}/render`, "POST",
-      { scenes: scenes || null, force: force ?? $("forceAll").checked, confirm: true });
+      // `?? null`, not `|| null`: an empty selection has to travel as an empty
+      // list. Sent as null it reads on the server as "everything".
+      { scenes: scenes ?? null, force: force ?? $("forceAll").checked, confirm: true });
     if (!res.started) alertBox(res.message, "note");
     startPolling();
   } catch (err) { alertBox(err); }
@@ -1309,8 +1413,17 @@ function startPolling() {
 async function refreshTtsPlan() {
   if (!P || !P.scenes.length) { $("ttsPlan").innerHTML = ""; return; }
   try {
-    const plan = await api(`/projects/${P.id}/narration/plan-audio`, "POST",
-                           { force: $("forceSpeak").checked });
+    const force = $("forceSpeak").checked;
+    // Same two calls, and the same reason: ask for a subset and the rows for
+    // everything else come back missing, leaving nothing to tick to get them
+    // back. The table is the whole plan; the price is the selection's.
+    const all = await api(`/projects/${P.id}/narration/plan-audio`, "POST", { force });
+    TTS_PLAN_ALL = all;
+    PICK_SPEAK.settle(all.speak);
+    const plan = PICK_SPEAK.picked
+      ? await api(`/projects/${P.id}/narration/plan-audio`, "POST",
+                  { scenes: PICK_SPEAK.numbers(), force })
+      : all;
     TTS_PLAN = plan;
     $("speakBtn").disabled = plan.count === 0 || !P.keys.renderful;
 
@@ -1323,9 +1436,9 @@ async function refreshTtsPlan() {
         tf("tts.missing", { count: plan.missing_narration.length }))}</div>`;
     }
 
-    if (!plan.count && !plan.skip.length) {
+    if (!all.speak.length && !all.skip.length) {
       html += `<div class="note">${escapeHtml(t("tts.noscript"))}</div>`;
-    } else if (!plan.count) {
+    } else if (!all.speak.length) {
       html += `<div class="note">${escapeHtml(t("tts.nothing"))}</div>`;
     } else {
       html += `<div class="note">${escapeHtml(tf("tts.summary", {
@@ -1333,25 +1446,27 @@ async function refreshTtsPlan() {
         estimate: moneyFine(plan.estimate),
         price: "$" + (plan.price_per_1k_chars || 0).toFixed(3),
       }))} ${escapeHtml(plan.price_note || "")}</div>`;
-      html += `<table><tr><th>${escapeHtml(t("plan.th.n"))}</th><th>${escapeHtml(t("plan.th.scene"))}</th>
-        <th>${escapeHtml(t("plan.th.why"))}</th></tr>` +
-        plan.speak.map((r) => `<tr><td>${r.n}</td><td>${escapeHtml(r.title)}</td>
-          <td class="muted">${escapeHtml(t("tts.reason." + r.reason_key))}</td></tr>`).join("") +
-        `</table>`;
+      html += pickedNote(PICK_SPEAK);
+      html += pickTable(all.speak, PICK_SPEAK, "tts.reason.");
     }
     $("ttsPlan").innerHTML = html;
+    wirePicks("ttsPlan", PICK_SPEAK);
   } catch (err) { $("ttsPlan").innerHTML = `<div class="err">${escapeHtml(err.message)}</div>`; }
 }
 
-async function doSpeak(scenes, force) {
-  const n = scenes ? scenes.length : (TTS_PLAN ? TTS_PLAN.count : 0);
+async function doSpeak(scenes, force, planned) {
+  // As with doRender: `planned` means the plan on screen was asked for exactly
+  // this request, so its estimate is the one to confirm. The per-line button
+  // forces one line the plan was not asked about, and prices it from its own
+  // character count -- the figure already on that button.
+  const n = planned ? (TTS_PLAN ? TTS_PLAN.count : 0) : scenes.length;
   if (!n) return;
-  const estimate = scenes
-    ? scenes.reduce((a, num) => {
+  const estimate = planned
+    ? (TTS_PLAN ? TTS_PLAN.estimate : 0)
+    : scenes.reduce((a, num) => {
         const s = P.scenes.find((x) => x.n === num);
         return a + (s ? priceForLine(s) : 0);
-      }, 0)
-    : (TTS_PLAN ? TTS_PLAN.estimate : 0);
+      }, 0);
   const cost = tf("confirm.cost", { cost: moneyFine(estimate) });
   const question = n === 1 ? tf("confirm.speak.one", { cost })
                            : tf("confirm.speak.many", { count: n, cost });
@@ -1359,7 +1474,8 @@ async function doSpeak(scenes, force) {
   try {
     clearAlerts();
     const res = await api(`/projects/${P.id}/narration/speak`, "POST",
-      { scenes: scenes || null, force: force ?? $("forceSpeak").checked, confirm: true });
+      // As above: an empty selection travels as an empty list, never as null.
+      { scenes: scenes ?? null, force: force ?? $("forceSpeak").checked, confirm: true });
     if (!res.started) alertBox(res.message, "note");
     startAudioPolling();
   } catch (err) { alertBox(err); }
@@ -1988,7 +2104,7 @@ $("narrBtn").onclick = async () => {
   }
 };
 
-$("speakBtn").onclick = () => doSpeak(null);
+$("speakBtn").onclick = () => doSpeak(PICK_SPEAK.numbers(), undefined, true);
 $("forceSpeak").addEventListener("change", refreshTtsPlan);
 // The two Claude phases. Same contract as the three batch cancels beside them:
 // press it any time, and it says plainly whether there was anything to stop.
@@ -2011,7 +2127,7 @@ $("cancelSpeakBtn").onclick = async () => {
 
 $("planBtn").onclick = refreshPlan;
 $("forceAll").addEventListener("change", refreshPlan);
-$("renderBtn").onclick = () => doRender(null);
+$("renderBtn").onclick = () => doRender(PICK_RENDER.numbers(), undefined, true);
 $("cancelBtn").onclick = async () => {
   try { const r = await api(`/projects/${P.id}/cancel`, "POST");
         alertBox(r.cancelling ? t("cancel.started") : t("cancel.idle"), "note"); }

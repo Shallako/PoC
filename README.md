@@ -347,6 +347,31 @@ models that advertise "native audio" are not used for this -- they invent
 ambience and dialogue from the image prompt and cannot be handed an approved
 script, so pictures move and TTS speaks.
 
+**Rendering some of the scenes, in one job.** The page could ask for two
+things: everything, or one scene from the arrow on its card. Both plan tables --
+images and narration -- now have a tick box per row and one in the header, and
+the batch button sends exactly what is ticked.
+
+The old shape hurt in the case it came up in most. Four scenes come back wrong,
+you fix four prompts, and you press four arrows -- but `start()` refuses while a
+job is running, so those are four jobs one after another. Serial, on a machine
+with seven workers idle. Ticking four boxes is one job across all seven.
+
+**A selection never holds a price.** What a subset costs comes back from the
+same `/plan` call the whole batch's does. A subset can still drag in a character
+portrait two of the chosen scenes share, and that portrait is billed; arithmetic
+in the page would be a second opinion about money and would miss it. So the
+table is drawn from the whole plan and the cost bar from the selection's --
+two local calls, both free.
+
+**An empty selection means none of them.** It used to mean all of them, because
+an empty list is falsy and `scene_numbers` was read for truth rather than for
+presence. That never came up while the only subset the page could send was one
+scene from an arrow. The moment a selection can be emptied by unticking, it is a
+full batch nobody asked for, and that one is billed -- so `plan`, `plan_audio`
+and the page all distinguish "nothing" from "not specified" now, and there is a
+test for each.
+
 **The image count is published, not repeated.** `min="1" max="40" value="12"`
 used to be typed into the markup while `config.py` held `MAX_SCENE_COUNT` and
 `DEFAULT_SCENE_COUNT` and `/api/status` published neither -- two copies of a
@@ -1023,7 +1048,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 404 offline tests, free
+    .venv\Scripts\python -m pytest             # 414 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium
