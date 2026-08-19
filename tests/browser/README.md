@@ -25,6 +25,8 @@ Seed a project with scenes (so nothing calls a paid API), start the app, then:
 Exit status is 0 when every check passes. It asserts:
 
 * step 1 keeps the story and the image count across a settings redraw;
+* the image count takes both bounds from the server and says the limit out loud,
+  in red once it is passed;
 * step 2 keeps a scene edit, the focus and the caret across a poll redraw;
 * the style block survives the same;
 * the style direction shows its refusal warning, names what to write instead,

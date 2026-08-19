@@ -64,6 +64,30 @@ check("step 1: the story survives a settings redraw",
 check("step 1: the image count survives too",
       (await page.inputValue("#sceneCount")) === "7");
 
+// The bounds on that box are the server's. `max="40"` used to be typed into the
+// markup beside a MAX_SCENE_COUNT nobody published, so tuning the constant left
+// the page offering the old range -- and type="number" enforces a max only on a
+// form submit, which this page never does, so the limit is said out loud too.
+const status = await page.evaluate(() => STATUS);
+check("step 1: the image count takes its bounds from the server",
+      (await page.getAttribute("#sceneCount", "max")) === String(status.max_scene_count)
+      && (await page.getAttribute("#sceneCount", "min")) === "1",
+      `max=${await page.getAttribute("#sceneCount", "max")}`);
+
+await page.fill("#sceneCount", String(status.max_scene_count + 1));
+await page.evaluate(() => updateSceneCount());
+check("step 1: asking for more images than the limit is shown in red",
+      await page.locator("#countLimit").evaluate((el) => el.classList.contains("over")),
+      await page.locator("#countLimit").innerText());
+check("step 1: the limit itself is on screen, not just the red",
+      (await page.locator("#countLimit").innerText()).includes(String(status.max_scene_count)));
+
+await page.fill("#sceneCount", "7");
+await page.evaluate(() => updateSceneCount());
+check("step 1: a count inside the range is not flagged",
+      !(await page.locator("#countLimit").evaluate(
+        (el) => el.classList.contains("over"))));
+
 // ---------------------------------------------------------------- step 2
 await page.evaluate(() => goStep(2));
 const body = page.locator('textarea[data-scene="2"][data-field="body"]');

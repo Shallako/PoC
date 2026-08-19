@@ -140,6 +140,22 @@ def _load(pid: str) -> dict:
         raise HTTPException(404, "No project by that name.") from None
 
 
+def _check_scene_count(count: int | None) -> None:
+    """Refuse an image count outside the range, rather than moving it.
+
+    compiler still clamps: that is the floor under a segmentation, and it has to
+    hold whatever reaches it. This is the contract with whoever asked, and it
+    says no in the same words the story limit does. A number that is silently
+    changed on the way in is a number the page and the project disagree about
+    for the rest of the session.
+    """
+    if count is None:
+        return
+    if not 1 <= int(count) <= config.MAX_SCENE_COUNT:
+        raise HTTPException(
+            400, f"Ask for between 1 and {config.MAX_SCENE_COUNT} images.")
+
+
 def _claude_error(e: compiler.ClaudeError) -> HTTPException:
     """A Claude failure the user can act on.
 
@@ -335,6 +351,12 @@ def api_status() -> dict:
         # whose result the user actually reads and edits.
         "claude_model": config.SEGMENT_MODEL,
         "max_story_chars": config.MAX_STORY_CHARS,
+        # Both ends of the image-count control. The server clamps the request
+        # into this range and says nothing about having done it, so a page that
+        # types its own bounds sends a number that is quietly changed on the way
+        # in -- ask for eighty scenes, budget for eighty, get forty.
+        "max_scene_count": config.MAX_SCENE_COUNT,
+        "default_scene_count": config.DEFAULT_SCENE_COUNT,
         "workers": config.WORKERS,
         # What the page tells the user while it waits out a 529. Published for
         # the same reason the story limit is: repeating it in the markup means
@@ -428,6 +450,7 @@ def api_create(body: NewProject) -> dict:
         raise HTTPException(400, "A project name is required.")
     if len(body.story) > config.MAX_STORY_CHARS:
         raise HTTPException(400, f"The story exceeds {config.MAX_STORY_CHARS} characters.")
+    _check_scene_count(body.scene_count)
     project = store.create(body.name, body.story, engine=body.engine,
                            scene_count=body.scene_count)
     activity.record(project["id"], "project.created", engine=project.get("engine"),
@@ -455,6 +478,7 @@ def api_patch(pid: str, body: ProjectPatch) -> dict:
     _load(pid)
     if body.story is not None and len(body.story) > config.MAX_STORY_CHARS:
         raise HTTPException(400, f"The story exceeds {config.MAX_STORY_CHARS} characters.")
+    _check_scene_count(body.scene_count)
 
     if body.engine is not None and body.engine not in engines.registry()["engines"]:
         raise HTTPException(400, f"Unknown engine {body.engine!r}")
@@ -469,7 +493,7 @@ def api_patch(pid: str, body: ProjectPatch) -> dict:
         if body.style_profile is not None:
             project["style_profile"] = body.style_profile
         if body.scene_count is not None:
-            project["scene_count"] = max(1, min(int(body.scene_count), config.MAX_SCENE_COUNT))
+            project["scene_count"] = int(body.scene_count)
         if body.prompt_language is not None:
             project["prompt_language"] = _prompt_language(body.prompt_language)
         if body.narration is not None:
@@ -543,6 +567,7 @@ def api_segment(pid: str, body: SegmentRequest) -> dict:
     if job and job.running:
         raise HTTPException(409, "A render is running; cancel it before re-segmenting.")
 
+    _check_scene_count(body.scene_count)
     count = body.scene_count or project.get("scene_count") or config.DEFAULT_SCENE_COUNT
     hint = body.style_hint if body.style_hint is not None else project.get("style_hint", "")
     prompt_lang = _prompt_language(
