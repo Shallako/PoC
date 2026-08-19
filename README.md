@@ -909,7 +909,8 @@ refused on save.
 
 **`engines.json` is not in the repository.** `engines.py` holds
 `DEFAULT_REGISTRY` and writes the file from it the first time the app loads, so
-a fresh clone regenerates it exactly and nothing is lost by its absence. It is
+a fresh clone regenerates it and nothing is lost by its absence -- the tracked
+copy held nothing `DEFAULT_REGISTRY` does not. It is
 also the file you are invited to edit, and the app rewrites it in place when a
 shipped entry's `schema_version` moves -- tracked, that showed up as a
 working-tree change nobody made, and every local edit was a conflict waiting for

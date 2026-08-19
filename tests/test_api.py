@@ -202,17 +202,22 @@ def test_the_clip_estimate_follows_resolution_and_never_reads_low(client):
 def test_a_missing_engines_json_is_regenerated_exactly(client):
     """Why it is not in the repository.
 
-    The tracked copy was byte-for-byte what engines.py writes, so it added
-    nothing a fresh clone could not produce -- while the app rewrites the file
-    in place whenever a shipped entry's schema_version moves, which showed up as
-    a working-tree change nobody made. If this ever stops holding, engines.json
+    The tracked copy held nothing DEFAULT_REGISTRY does not, so it added nothing
+    a fresh clone could not produce -- while the app rewrites the file in place
+    whenever a shipped entry's schema_version moves, which showed up as a
+    working-tree change nobody made. If this ever stops holding, engines.json
     carries something only the repository has, and untracking it lost it.
     """
     import json
     assert not config.ENGINES_FILE.exists()       # the sandbox starts clean
     client.get("/api/engines")
-    written = json.loads(config.ENGINES_FILE.read_text(encoding="utf-8"))
-    assert written == engines.DEFAULT_REGISTRY
+    text = config.ENGINES_FILE.read_text(encoding="utf-8")
+    assert json.loads(text) == engines.DEFAULT_REGISTRY
+    # And written the way a migration writes it. Two spellings of one registry
+    # means the first migration rewrites every line with an em dash in it, and
+    # the diff then says nothing about what actually changed.
+    assert json.dumps(engines.DEFAULT_REGISTRY, indent=2, ensure_ascii=False) == text
+    assert "\\u2014" not in text                   # the dash itself, not an escape
 
 
 def test_a_hand_written_engines_json_gains_new_engines_without_losing_edits(client):
