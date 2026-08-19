@@ -126,6 +126,89 @@ await page.evaluate(() => renderScenes());
 check("step 2: the style block survives too",
       (await page.inputValue("#styleProfile")) === STYLE);
 
+// ----------------------------------------------------------- picking a subset
+// Which scenes a batch is for is settled in tests/test_subset.py against the
+// real orchestrator. What only a browser can show is the table doing it: the
+// ticks, the count that follows them, and -- the one that costs money if it is
+// wrong -- what unticking everything does to the button.
+// Step 3 for real, not a call to refreshPlan(): these are clicks on boxes, and
+// a click needs the panel to actually be on screen.
+await page.evaluate(() => goStep(3));
+await page.waitForFunction(
+  () => document.querySelectorAll("#planOut [data-pick]").length > 0,
+                           null, { timeout: 10000 });
+
+// Scoped to #planOut: the narration plan below has a table of its own, and a
+// page-wide locator would count both.
+const rows = await page.locator("#planOut [data-pick]").count();
+const planned = Number(await page.locator("#cbCount").innerText());
+check("pick: every planned scene has a box, and they start ticked",
+      rows === planned && rows > 1
+      && (await page.locator("#planOut [data-pick]:checked").count()) === rows,
+      `${rows} rows, batch of ${planned}`);
+
+// Untick one. The new count comes back from the server, not from subtracting
+// one here -- a subset can still drag in a character portrait.
+const first = page.locator("#planOut [data-pick]").first();
+await first.uncheck();
+await page.waitForFunction(
+  (n) => document.getElementById("cbCount").textContent.trim() === String(n),
+  planned - 1, { timeout: 10000 });
+check("pick: unticking a scene narrows the batch", true, `${planned - 1} left`);
+check("pick: the page says it is rendering a subset",
+      /Rendering \d+ of the \d+/.test(await page.locator("#planOut").innerText()));
+// Half-selected is neither on nor off. A header box still reading "all" while
+// six of seven are ticked is the control lying about what the button sends.
+check("pick: the header box goes indeterminate, not on, for a subset",
+      await page.locator("#planOut [data-pick-all]").evaluate(
+        (el) => el.indeterminate && !el.checked));
+
+// A click on a half-selected header takes it to all -- the browser's own rule
+// for an indeterminate box, and the one people already have in their hands.
+await page.locator("#planOut [data-pick-all]").click();
+await page.waitForFunction(
+  (n) => document.getElementById("cbCount").textContent.trim() === String(n),
+  planned, { timeout: 10000 });
+check("pick: the header box puts them all back",
+      (await page.evaluate(() => PICK_RENDER.numbers())) === null,
+      "and a full selection collapses to the request it always sent");
+
+// The one that matters. Unticking everything used to travel as null, and null
+// means "the whole batch" -- the opposite of what was asked, and billed.
+await page.locator("#planOut [data-pick-all]").uncheck();
+await page.waitForFunction(
+  () => document.getElementById("cbCount").textContent.trim() === "0",
+  null, { timeout: 10000 });
+check("pick: unticking everything asks for nothing, not for everything",
+      (await page.evaluate(() => PICK_RENDER.numbers().length)) === 0);
+check("pick: with nothing selected the spend button is off",
+      await page.locator("#renderBtn").isDisabled());
+check("pick: and it says what to do about it",
+      /Nothing selected/.test(await page.locator("#planOut").innerText()));
+
+await page.locator("#planOut [data-pick-all]").check();
+await page.waitForFunction(
+  (n) => document.getElementById("cbCount").textContent.trim() === String(n),
+  planned, { timeout: 10000 });
+
+await page.evaluate(() => goStep(2));     // back to where the rest of this left off
+
+// The narration plan is the same table with the same boxes, and it is wired
+// separately -- one selection object each, so narrowing the render batch must
+// not narrow the speaking one.
+await page.waitForFunction(
+  () => document.querySelectorAll("#ttsPlan [data-pick]").length > 0,
+  null, { timeout: 10000 });
+await page.locator("#ttsPlan [data-pick]").first().uncheck();
+await page.waitForFunction(() => PICK_SPEAK.numbers() !== null, null, { timeout: 10000 });
+check("pick: the narration table picks separately from the render one",
+      (await page.evaluate(() => PICK_SPEAK.numbers().length))
+        === (await page.locator("#ttsPlan [data-pick]").count()) - 1
+      && (await page.evaluate(() => PICK_RENDER.numbers())) === null,
+      "the render selection is untouched");
+await page.locator("#ttsPlan [data-pick-all]").click();
+await page.waitForFunction(() => PICK_SPEAK.numbers() === null, null, { timeout: 10000 });
+
 // ---------------------------------------------------------------- the limit
 // The story limit belongs to config.py. The page used to repeat it in four
 // places, so raising it gave a server that accepted the story and a counter

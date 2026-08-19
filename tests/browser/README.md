@@ -29,6 +29,11 @@ Exit status is 0 when every check passes. It asserts:
   in red once it is passed;
 * step 2 keeps a scene edit, the focus and the caret across a poll redraw;
 * the style block survives the same;
+* the plan table tick-boxes narrow the batch, the count follows them from the
+  server, the header box goes indeterminate for a subset, unticking everything
+  asks for nothing rather than everything and turns the spend button off, the
+  header box puts them all back, and the narration table picks separately from
+  the render one;
 * the style direction shows its refusal warning, names what to write instead,
   clears when the advice is followed, stops Segment once and then lets it
   through, and re-arms when the text is edited;
