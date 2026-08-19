@@ -394,7 +394,13 @@ def write_narration_files(pid: str, project: dict) -> list[str]:
 
 
 def export(pid: str, project: dict, *, flatten: bool = True) -> dict:
-    """Copy selected renders (and narration) into export/ under editor-friendly names."""
+    """Copy selected renders (and narration) into export/ under editor-friendly names.
+
+    Takes the *decorated* project: it reports the staleness app._decorate
+    computed rather than working it out again. A scene skipped for having no
+    image at all is reported too -- a twelve-scene project quietly writing nine
+    files is the same failure as shipping a stale one, and harder to notice.
+    """
     edir = export_dir(pid)
     edir.mkdir(parents=True, exist_ok=True)
     for old in edir.iterdir():
@@ -402,12 +408,12 @@ def export(pid: str, project: dict, *, flatten: bool = True) -> dict:
             old.unlink()
 
     rows = []
+    stale = {"images": [], "audio": [], "missing_images": [], "unspoken": []}
     for scene in sorted(project.get("scenes", []), key=lambda s: s["n"]):
         asset = scene.get("asset")
-        if not asset:
-            continue
-        src = images_dir(pid) / asset
-        if not src.is_file():
+        src = images_dir(pid) / asset if asset else None
+        if not asset or not src.is_file():
+            stale["missing_images"].append(scene["n"])
             continue
         stem = (flat_stem(pid, scene["n"], scene["slug"]) if flatten
                 else Path(asset).stem)
@@ -415,7 +421,11 @@ def export(pid: str, project: dict, *, flatten: bool = True) -> dict:
         shutil.copy2(src, dest)
 
         row = {"scene": scene["n"], "image": dest.name, "narration": "",
-               "audio": "", "seconds": scene.get("audio_seconds")}
+               "audio": "", "seconds": scene.get("audio_seconds"),
+               "stale_image": bool(scene.get("dirty")),
+               "stale_audio": bool(scene.get("audio_dirty"))}
+        if row["stale_image"]:
+            stale["images"].append(scene["n"])
         text = (scene.get("narration") or "").strip()
         if text:
             nfile = edir / (stem + ".txt")
@@ -430,6 +440,10 @@ def export(pid: str, project: dict, *, flatten: bool = True) -> dict:
                 adest = edir / (audio_stem(pid, scene["n"], scene["slug"]) + asrc.suffix)
                 shutil.copy2(asrc, adest)
                 row["audio"] = adest.name
+        if row["stale_audio"] and row["audio"]:
+            stale["audio"].append(scene["n"])
+        if text and not row["audio"]:
+            stale["unspoken"].append(scene["n"])
         rows.append(row)
 
     from .narration import full_script
@@ -441,7 +455,8 @@ def export(pid: str, project: dict, *, flatten: bool = True) -> dict:
 
     if manifest_file(pid).is_file():
         shutil.copy2(manifest_file(pid), edir / "manifest.json")
-    return {"dir": str(edir), "files": rows, "full_voiceover": bool(full), **extras}
+    return {"dir": str(edir), "files": rows, "full_voiceover": bool(full),
+            "stale": stale, **extras}
 
 
 def write_editor_files(pid: str, project: dict, edir: Path) -> dict:

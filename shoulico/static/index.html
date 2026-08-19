@@ -104,6 +104,11 @@
     transition:width .25s linear}
   .screen{margin-top:8px;font-size:12.5px;line-height:1.45}
   .screen .warn,.screen .note{padding:8px 10px;margin:0 0 6px}
+  .stale{margin:10px 0 0}
+  .stale:empty{display:none}
+  .stale .warn{margin:0}
+  .stale .why{display:block;margin-top:5px;color:var(--slate-600)}
+  tr.stale-row td{background:var(--amber-50)}
   .screen .fix{display:block;margin-top:4px;color:var(--slate-600)}
   .screen .hit{font-family:ui-monospace,Menlo,Consolas,monospace;
     background:rgba(0,0,0,.05);border-radius:4px;padding:0 4px}
@@ -335,6 +340,7 @@
         exists. Where a line has not been spoken yet the word-count estimate stands in, and it runs about 30%
         long — so the runtime below is a projection until every line has a voice.</p>
       <div id="videoPlan"></div>
+      <div id="videoStale" class="stale"></div>
       <p></p>
       <button class="btn" id="assembleBtn" data-i18n="s4.assemble">Assemble the video</button>
       <button class="btn ghost sm hidden" id="cancelVideoBtn" data-i18n="s4.cancel">Cancel</button>
@@ -364,6 +370,7 @@
         folder into an editor pairs them on sight.</p>
       <label><input type="checkbox" id="flatten" checked style="width:auto">
         <span data-i18n="s5.flatten">flatten filenames (drop <code>_vNN</code> / <code>_seed</code>)</span></label>
+      <div id="exportStale" class="stale"></div>
       <p></p>
       <button class="btn" id="exportBtn" data-i18n="s5.write">Write export folder</button>
       <span class="muted" id="exportMsg" style="margin-left:10px"></span>
@@ -571,6 +578,17 @@ const DYN = {
   "clip.notes": "{name} — what is proven and what is not",
   "help.clip": "Renderful has no model that does both: an image engine and a video model are separate ids, so this pairs one with the other and stores both sets of settings on the project. The image half works today, end to end. The video half is declared — the model id, frame, length and audio options are real and validated — but nothing sends them yet, so choosing this engine costs exactly what its images cost, about {price} per clip if and when clips are wired. The audio controls in particular are read off how the model behaves, not off a published schema, so prove one clip before trusting a batch to them.",
   "help.styleHint": "One instruction for the whole set, not for a single image. Claude folds it into the shared style block — art style, period, palette, recurring characters, wardrobe — and that block is appended to every scene prompt and to every character portrait, which is what keeps the images looking like one series instead of {count} unrelated pictures. It is read when you press Segment, so editing it afterwards changes nothing on its own: either segment again, or edit the style block directly on step 2, which is faster and does not rewrite your prompts.\n\nBecause it reaches every image, a phrase the image service refuses here does not spoil one picture — it fails the entire batch, and you are billed for all of it. The four things that get refused, in the order they actually happen:\n\n• Anyone who might be a minor. \"boy\", \"girl\", \"kid\", \"teen\", a school, or an age under 18. Leaving age unsaid is not safe either: the service guesses, and it guesses cautiously. If everyone is an adult, write it — \"two men in their twenties\".\n\n• Clothing described by its absence. \"no pants\", \"shirtless\", \"without a jacket\". You mean summer clothes; it reads an instruction to undress somebody. Write what they wear instead — \"khaki shorts and canvas sneakers\" — which is also the phrasing that renders better, since these models handle \"no\" badly.\n\n• Real people by name or likeness, and trademarked characters — Disney, Marvel, Ghibli. Describe the look you want in your own words.\n\n• Graphic injury. Imply it: aftermath, reaction, an object.\n\nThe box checks itself as you type and says so before you spend anything. It is a heuristic, not the service's own filter, so it can miss things and can be over-cautious — it never stops you, it only warns.",
+  "stale.cut.h": "Some of this would be cut from work that is out of date",
+  "stale.export.h": "Some of this would be handed over out of date",
+  "stale.images": "Pictures that are not what their prompt would make now — scenes {list} ({count} of {scenes}). Re-render in step 2 first, or go ahead: they travel exactly as you see them.",
+  "stale.audio": "Lines edited after they were spoken — scenes {list}. The recording is the old sentence, and the caption timings follow the recording.",
+  "stale.missing": "No image at all — scenes {list}. Left out of the folder entirely, not left blank.",
+  "stale.unspoken": "Not spoken yet — scenes {list}. Their length is a word-count estimate, which runs about 30% long.",
+  "stale.fine": "Nothing here is blocked. Out-of-date work is often the work you meant to keep — this only makes sure it is not a surprise.",
+  "stale.badge": "line edited since",
+  "export.stale.warn": "In that folder: {images} out-of-date images, {audio} out-of-date recordings, {missing} scenes left out.",
+  "export.th.state": "state",
+
   "wait.overloaded.h": "Claude is busy — waiting to try again",
   "wait.overloaded": "Anthropic is at capacity right now. This is their load, not your key and not your story, and a request they turn away is never charged.",
   "wait.rate_limit.h": "Your Anthropic account is being rate limited",
@@ -1066,7 +1084,7 @@ function patchScene(el, s) {
 
   const audio = el.querySelector('[data-part="audio"]');
   const sig = [LANG.code, s.audio || "", s.audio_seconds || "", s.audio_measured,
-               s.audio_status || "", s.audio_detail || "",
+               s.audio_status || "", s.audio_detail || "", s.audio_dirty,
                (s.narration || "").trim() ? moneyFine(priceForLine(s)) : "silent"].join("|");
   if (audio.dataset.sig !== sig) {
     audio.dataset.sig = sig;
@@ -1099,6 +1117,8 @@ function sceneAudio(s) {
   const state = s.audio_status && s.audio_status !== "done"
     ? `<span class="status ${escapeHtml(s.audio_status)}">${escapeHtml(
         s.audio_detail || t("status." + s.audio_status) || s.audio_status)}</span>`
+    : s.audio_dirty
+    ? `<span class="status dirty">${escapeHtml(t("stale.badge"))}</span>`
     : "";
   return `<div class="audiorow">${badge}${player}
     <button class="btn ghost sm" data-speak="${s.n}">${escapeHtml(
@@ -1505,6 +1525,8 @@ function redraw(refill) {
   updateStoryCount();
   renderEngines(); renderVoices(); renderScenes(refill); renderGallery();
   renderVideo(); renderVideoResult();
+  renderStale("videoStale", "stale.cut.h", true);
+  renderStale("exportStale", "stale.export.h", false);
   $("cbSpent").textContent = money((P.spend && P.spend.actual) || 0);
   if (P.job && P.job.running && !POLL) startPolling();
   if (P.audio_job && P.audio_job.running && !TTS_POLL) startAudioPolling();
@@ -1639,6 +1661,50 @@ $("consistency").addEventListener("change", async (e) => {
     alertBox(err);
   }
 });
+
+// --------------------------------------------------------------- out of date
+//
+// The project has always known which work no longer matches what it was made
+// from -- plan() will not skip a scene whose prompt moved, and plan_audio will
+// re-speak a line that was edited. But it only ever said so where the work was
+// made. Step 4 cuts a video and step 5 writes a folder, and both did it in
+// silence: the last moment the project can still say "that picture is not what
+// this prompt makes now" is on the way out of the door, because after that the
+// files are in an editor and the only evidence is that something looks wrong.
+//
+// Nothing here blocks. Keeping a render you liked after tweaking its prompt is
+// a normal thing to want, and a gate would just be clicked through. Saying so
+// is the whole job.
+
+function staleLines(st) {
+  const list = (ns) => ns.slice(0, 12).join(", ") + (ns.length > 12 ? "…" : "");
+  const rows = [];
+  const scenes = (P.scenes || []).length;
+  if (st.images.length)
+    rows.push(tf("stale.images", { count: st.images.length, scenes, list: list(st.images) }));
+  if (st.audio.length)
+    rows.push(tf("stale.audio", { count: st.audio.length, list: list(st.audio) }));
+  if (st.missing_images.length)
+    rows.push(tf("stale.missing", {
+      count: st.missing_images.length, list: list(st.missing_images) }));
+  return rows;
+}
+
+function renderStale(boxId, headKey, withUnspoken) {
+  const box = $(boxId);
+  const st = P.stale;
+  if (!st) { box.innerHTML = ""; return; }
+  const rows = staleLines(st);
+  // Only the cut cares about an unspoken line: it is not out of date, it is
+  // just still an estimate, and the export copies the text either way.
+  if (withUnspoken && st.unspoken.length)
+    rows.push(tf("stale.unspoken", { count: st.unspoken.length,
+                                     list: st.unspoken.slice(0, 12).join(", ") }));
+  if (!rows.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="warn"><strong>${escapeHtml(t(headKey))}</strong>` +
+    rows.map((r) => `<span class="why">${escapeHtml(r)}</span>`).join("") +
+    `<span class="why">${escapeHtml(t("stale.fine"))}</span></div>`;
+}
 
 // ------------------------------------------------------------ the Claude wait
 //
@@ -1926,6 +1992,12 @@ $("cancelVideoBtn").onclick = async () => {
   catch (err) { alertBox(err); }
 };
 
+function staleCount(st) {
+  if (!st) return 0;
+  return (st.images || []).length + (st.audio || []).length
+       + (st.missing_images || []).length;
+}
+
 $("exportBtn").onclick = async () => {
   clearAlerts();
   try {
@@ -1938,11 +2010,24 @@ $("exportBtn").onclick = async () => {
       `<div class="note">${escapeHtml(tf("export.dir", { dir: res.dir }))}</div>` +
       (extras.length ? `<div class="note">${escapeHtml(tf("export.extras", {
         files: extras.join(", "), runtime: clock(res.runtime_seconds) }))}</div>` : "") +
+      // What was written, said again from the folder's side: the warning above
+      // the button was a forecast, this is the receipt.
+      (staleCount(res.stale) ? `<div class="warn">${escapeHtml(tf("export.stale.warn", {
+        images: (res.stale.images || []).length,
+        audio: (res.stale.audio || []).length,
+        missing: (res.stale.missing_images || []).length }))}</div>` : "") +
       `<table><tr><th>${escapeHtml(t("export.th.n"))}</th><th>${escapeHtml(t("export.th.image"))}</th>
-        <th>${escapeHtml(t("export.th.narration"))}</th><th>${escapeHtml(t("export.th.audio"))}</th></tr>` +
-      res.files.map((f) => `<tr><td>${f.scene}</td><td><code>${escapeHtml(f.image)}</code></td>
-        <td><code>${escapeHtml(f.narration || "—")}</code></td>
-        <td><code>${escapeHtml(f.audio || "—")}</code></td></tr>`).join("") + `</table>`;
+        <th>${escapeHtml(t("export.th.narration"))}</th><th>${escapeHtml(t("export.th.audio"))}</th>
+        <th>${escapeHtml(t("export.th.state"))}</th></tr>` +
+      res.files.map((f) => {
+        const flags = [f.stale_image ? t("status.dirty") : "",
+                       f.stale_audio ? t("stale.badge") : ""].filter(Boolean);
+        return `<tr class="${flags.length ? "stale-row" : ""}"><td>${f.scene}</td>
+          <td><code>${escapeHtml(f.image)}</code></td>
+          <td><code>${escapeHtml(f.narration || "—")}</code></td>
+          <td><code>${escapeHtml(f.audio || "—")}</code></td>
+          <td>${escapeHtml(flags.join(", ") || "—")}</td></tr>`;
+      }).join("") + `</table>`;
   } catch (err) { alertBox(err); }
 };
 

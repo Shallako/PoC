@@ -33,6 +33,10 @@ Exit status is 0 when every check passes. It asserts:
 * the 529 wait panel counts down, numbers the attempt, quotes the server's own
   patience, names a fallback, tells a rate limit from an outage, and stays quiet
   on a first attempt that is going fine;
+* the out-of-date warning appears above both the assemble and the export button,
+  names the scenes, separates a stale picture from an edited line from a missing
+  image, says nothing is blocked, keeps unspoken lines to the cut, and disappears
+  entirely when there is nothing to report;
 * both Claude-phase cancel buttons exist and are hidden while idle;
 * the page script carries its CSP nonce;
 * nothing lands in the console — a CSP violation shows up here and nowhere else.
