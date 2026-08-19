@@ -389,6 +389,53 @@ from Opus to Sonnet, and how many tokens it thought with. Effort is billed at th
 output rate, so `output_tokens` is the number that moves when one of the effort
 constants in `config.py` changes.
 
+**Waiting on Claude, out loud.** A 529 is Anthropic at capacity: the model never
+ran, so nothing is charged, and it is usually brief. That is why the server
+waits and tries again rather than failing — four attempts on the requested
+model, then one on the fallback, with 3, 8 and 20 seconds between them.
+
+The cost of that decision was that the whole ladder runs inside the one POST
+that started it, so from the browser it was indistinguishable from a very slow
+answer: a disabled button and "Claude is reading the story…" for a minute or
+more, no explanation, and a silent switch to Sonnet at the end of it. The
+activity log has one of those — `fell_back: true`, and nothing anywhere said why.
+
+Now the page reads what the call is doing while the request is still open:
+
+    ┌────────────────────────────────────────────────────────────────┐
+    │ Claude is busy — waiting to try again                          │
+    │ Anthropic is at capacity right now. This is their load, not    │
+    │ your key and not your story, and a request they turn away is   │
+    │ never charged.                                                 │
+    │ Trying again in 15s · attempt 5 of 5                           │
+    │ claude-opus-5 stayed busy, so claude-sonnet-5 will answer this │
+    │ one instead.                                                   │
+    │ It keeps trying for about 51s of waiting in total, then stops  │
+    │ and tells you. Cancel is safe at any point — nothing has been  │
+    │ spent.                                                         │
+    │ ▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
+    └────────────────────────────────────────────────────────────────┘
+
+Three things it makes a point of saying: whose fault it is (theirs), that it
+costs nothing (a refused request is never billed), and when it will give up. A
+fallback is named *before* the other model answers, because while it is waiting
+is when somebody might prefer to cancel and come back later. A rate limit gets a
+different sentence from an outage — the key is fine, there have just been too
+many requests — and a first attempt that is going normally says nothing at all.
+
+**Every number there comes from the server.** `CLAUDE_ATTEMPTS`,
+`CLAUDE_BACKOFF`, `CLAUDE_SDK_RETRIES` and `CLAUDE_RETRY_AFTER_MAX` live in
+`config.py`, `compiler.py` reads them through, and `/api/status` publishes them
+along with `claude_patience` — the total waiting the ladder can produce, 51
+seconds as shipped. Tune the constants and the page's countdown, attempt count
+and "about 51s" all follow. A copy typed into the markup would count down to a
+retry that had already happened, which is the same reason the story limit is
+published rather than repeated.
+
+`GET /api/projects/<id>/claude/<segment|narration>` is the progress channel. It
+serves `retry_in` rather than a deadline, so the page never has to agree with
+this machine about what time it is.
+
 **The style direction is read before anything is spent.** The style direction on
 step 1 is the highest-leverage text in the app and the easiest to get wrong.
 Claude folds it into the shared style block, and that block is appended to every
@@ -892,7 +939,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 363 offline tests, free
+    .venv\Scripts\python -m pytest             # 379 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium

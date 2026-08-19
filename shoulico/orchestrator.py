@@ -98,11 +98,51 @@ def status(pid: str, kind: str = KIND_RENDER) -> dict | None:
 KIND_SEGMENT = "segment"
 KIND_NARRATION = "narration"
 
-# A set per slot rather than one event, because nothing stops two segmentations
+class Call:
+    """One in-flight Claude call: a stop switch, and what it is doing.
+
+    It was a bare threading.Event, and still behaves as one -- set() and
+    is_set() -- because every holder treats it as the stop switch. It grew a
+    second half because a 529 ladder is invisible from the browser: the whole
+    retry sequence happens inside one HTTP request, so the page sat on
+    "Claude is reading the story..." for minutes with no way to tell a slow
+    answer from four failed attempts and a wait. Now the call says so, and the
+    page reads it while the request it belongs to is still open.
+    """
+
+    def __init__(self) -> None:
+        self._stop = threading.Event()
+        self._state: dict = {}
+        self._guard = threading.Lock()
+
+    # -- the stop switch, unchanged ------------------------------------ #
+
+    def set(self) -> None:
+        self._stop.set()
+
+    def is_set(self) -> bool:
+        return self._stop.is_set()
+
+    # -- what it is doing ---------------------------------------------- #
+
+    def note(self, **fields) -> None:
+        """Called from inside the compiler's retry ladder. Replaces rather than
+        merges: each note describes the whole of the current situation, and a
+        leftover `retry_at` from the last wait would have the page counting down
+        during a call that is actually running."""
+        with self._guard:
+            self._state = {k: v for k, v in fields.items() if v is not None}
+
+    def state(self) -> dict:
+        with self._guard:
+            return dict(self._state)
+
+
+# A set per slot rather than one call, because nothing stops two segmentations
 # for the same project overlapping -- the button is disabled in the page, which
 # is not the same as being impossible. Cancelling a phase stops every call in
-# flight for it, and each call removes only its own event on the way out.
-_calls: dict[str, set[threading.Event]] = {}
+# flight for it, and each call removes only its own entry on the way out.
+_calls: dict[str, set[Call]] = {}
 _calls_guard = threading.Lock()
 
 
@@ -110,16 +150,16 @@ _calls_guard = threading.Lock()
 def running_call(pid: str, kind: str):
     """Register an in-flight Claude call so another request can stop it."""
     slot = _slot(pid, kind)
-    event = threading.Event()
+    call = Call()
     with _calls_guard:
-        _calls.setdefault(slot, set()).add(event)
+        _calls.setdefault(slot, set()).add(call)
     try:
-        yield event
+        yield call
     finally:
         with _calls_guard:
             live = _calls.get(slot)
             if live is not None:
-                live.discard(event)
+                live.discard(call)
                 if not live:
                     del _calls[slot]
 
@@ -127,6 +167,24 @@ def running_call(pid: str, kind: str):
 def call_running(pid: str, kind: str) -> bool:
     with _calls_guard:
         return bool(_calls.get(_slot(pid, kind)))
+
+
+def call_state(pid: str, kind: str) -> dict:
+    """What this phase's Claude call is doing, for the page to show.
+
+    With two calls overlapping there is one progress line to put them on, so the
+    one that has something to say wins -- an idle registration would otherwise
+    blank out a live retry countdown.
+    """
+    with _calls_guard:
+        live = list(_calls.get(_slot(pid, kind)) or ())
+    running = bool(live)
+    state: dict = {}
+    for call in live:
+        current = call.state()
+        if current:
+            state = current
+    return {"running": running, **state}
 
 
 def cancel(pid: str, kind: str = KIND_RENDER) -> bool:
@@ -141,11 +199,11 @@ def cancel(pid: str, kind: str = KIND_RENDER) -> bool:
         job.stop.set()
         return True
     with _calls_guard:
-        events = list(_calls.get(_slot(pid, kind)) or ())
+        calls = list(_calls.get(_slot(pid, kind)) or ())
     stopped = False
-    for event in events:
-        if not event.is_set():
-            event.set()
+    for call in calls:
+        if not call.is_set():
+            call.set()
             stopped = True
     return stopped
 

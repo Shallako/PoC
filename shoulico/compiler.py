@@ -215,9 +215,18 @@ log = logging.getLogger("shoulico.claude")
 # retries are deliberately impatient (sub-second, twice), which is right for a
 # blip and useless for a busy few minutes -- so we ladder on top of them, the
 # way renderful.api_call does for 5xx.
-CLAUDE_ATTEMPTS = 4                    # tries on the requested model
-CLAUDE_BACKOFF = (3, 8, 20)            # seconds before attempts 2, 3, 4
-SDK_RETRIES = 2                        # the SDK's fast retries inside each attempt
+#
+# The numbers live in config.py because the page quotes them back to the user
+# while it waits. Read through these names so nothing here has to change if they
+# move again.
+# What a call is doing, for the page. Two states, because there are only two
+# things it can be: talking to Claude, or waiting to try again.
+PHASE_CALLING = "calling"
+PHASE_WAITING = "waiting"
+
+CLAUDE_ATTEMPTS = config.CLAUDE_ATTEMPTS
+CLAUDE_BACKOFF = config.CLAUDE_BACKOFF
+SDK_RETRIES = config.CLAUDE_SDK_RETRIES
 
 
 class ClaudeError(RuntimeError):
@@ -290,7 +299,7 @@ def _retry_after(exc) -> float | None:
     except Exception:  # noqa: BLE001 - no response, no header, no problem
         return None
     try:
-        return max(0.0, min(float(raw), 120.0))
+        return max(0.0, min(float(raw), config.CLAUDE_RETRY_AFTER_MAX))
     except (TypeError, ValueError):
         return None
 
@@ -389,18 +398,27 @@ def _stream_once(client, system: str, user: str, schema: dict, model: str,
 
 def _call(system: str, user: str, schema: dict, api_key: str | None,
           model: str, max_tokens: int, meta: dict | None, stop=None,
-          effort: str = config.SEGMENT_EFFORT):
+          effort: str = config.SEGMENT_EFFORT, note=None):
     """Ride out a capacity blip on the requested model, then try the fallback.
 
     Only capacity and connection failures are retried. A bad request or an
     unknown error is re-raised untouched -- retrying those burns time and never
     succeeds, and the caller already reports them verbatim.
+
+    `note` is called with what is happening, whenever it changes. The whole
+    ladder runs inside one HTTP request, so without it a browser cannot tell a
+    slow answer from four refusals and a wait -- which is a minute or more of a
+    disabled button and no explanation. See orchestrator.Call.
     """
     client = _client(api_key)
     plan = [model] * CLAUDE_ATTEMPTS
     fallback = config.FALLBACK_CLAUDE_MODEL
     if fallback and fallback != model:
         plan.append(fallback)
+
+    def say(**fields) -> None:
+        if note is not None:
+            note(of=len(plan), **fields)
 
     waited, last, kind = 0.0, None, "transient"
     for i, attempt_model in enumerate(plan):
@@ -411,10 +429,21 @@ def _call(system: str, user: str, schema: dict, api_key: str | None,
             raise Cancelled("stopped between attempts")
         if i:
             delay = _retry_after(last) or CLAUDE_BACKOFF[min(i - 1, len(CLAUDE_BACKOFF) - 1)]
+            # Published before the sleep, not after: the wait is the part the
+            # user is sitting through, and a countdown that appears once it is
+            # over is a log entry, not a progress indicator.
+            say(phase=PHASE_WAITING, attempt=i + 1, model=attempt_model,
+                reason=kind, seconds=round(delay, 1),
+                retry_at=time.time() + delay,
+                # A fallback is worth naming: the set is about to be written by
+                # a different model from the one the project asked for.
+                falling_back=attempt_model != model)
             waited += delay
             _sleep(delay, stop)
             if _stopped(stop):
                 raise Cancelled("stopped while waiting to retry")
+        say(phase=PHASE_CALLING, attempt=i + 1, model=attempt_model,
+            falling_back=attempt_model != model)
         try:
             message = _stream_once(client, system, user, schema, attempt_model,
                                    max_tokens, stop, effort)
@@ -498,7 +527,8 @@ def _structured_call(system: str, user: str, schema: dict, api_key: str | None,
                      model: str, max_tokens: int = 32000,
                      meta: dict | None = None, stop=None,
                      effort: str = config.SEGMENT_EFFORT,
-                     pid: str | None = None, task: str = "claude") -> dict:
+                     pid: str | None = None, task: str = "claude",
+                     progress=None) -> dict:
     """One streamed, schema-constrained Claude call, ridden through overloads.
 
     `stop` is a threading.Event the caller may set from another request to
@@ -519,7 +549,8 @@ def _structured_call(system: str, user: str, schema: dict, api_key: str | None,
     # number that moves when one of the effort constants is changed.
     with _recorded(pid, task, model, effort) as note:
         message = _call(system, user, schema, api_key, model, max_tokens,
-                        meta if meta is not None else note.meta, stop, effort)
+                        meta if meta is not None else note.meta, stop, effort,
+                        progress)
         note.answered(meta if meta is not None else note.meta, message)
 
     if message.stop_reason == "refusal":
@@ -577,6 +608,7 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
             dialect_notes: list[str] | None = None,
             prompt_language: str = "story",
             pid: str | None = None,
+            progress=None,
             stop=None) -> dict:
     """Return {'language','model','fell_back','style_profile','scenes'}."""
     story = (story or "").strip()
@@ -604,7 +636,7 @@ def segment(story: str, scene_count: int, *, style_hint: str = "",
     meta: dict = {}
     data = _structured_call(SEGMENT_SYSTEM, user, SEGMENT_SCHEMA, api_key, model,
                             meta=meta, stop=stop, effort=effort,
-                            pid=pid, task="segment")
+                            pid=pid, task="segment", progress=progress)
 
     cast = normalize_cast(data.get("cast"))
     known = {c["name"] for c in cast}

@@ -190,6 +190,70 @@ await page.waitForTimeout(600);
 check("style: ordinary art direction is not flagged",
       (await styleBox.innerHTML()) === "");
 
+// ------------------------------------------------------------- the 529 wait
+// The plumbing -- the ladder, the countdown, the fallback -- is proven in
+// tests/test_overload.py against the real compiler. What only a browser can
+// show is the panel it all ends up in, so these drive the renderer with the
+// states the server actually sends.
+const waitBox = page.locator("#segmentWait");
+
+const waiting = await page.evaluate(() => {
+  drawWait("segmentWait", { running: true, phase: "waiting", attempt: 2, of: 5,
+                            reason: "overloaded", seconds: 8, retry_in: 6,
+                            model: "claude-opus-5", falling_back: false });
+  return document.getElementById("segmentWait").innerText;
+});
+check("wait: a 529 says who is busy and that nothing was charged",
+      /capacity/i.test(waiting) && /never charged/i.test(waiting),
+      waiting.split("\n")[1]);
+check("wait: it counts down and numbers the attempt",
+      /6s/.test(waiting) && /attempt 2 of 5/.test(waiting));
+check("wait: it says how long it will keep trying",
+      /51s/.test(waiting), waiting);
+check("wait: the bar shows how much of this pause has run",
+      (await waitBox.locator(".bar i").getAttribute("style")) === "width:25%",
+      await waitBox.locator(".bar i").getAttribute("style"));
+
+const fell = await page.evaluate(() => {
+  drawWait("segmentWait", { running: true, phase: "waiting", attempt: 5, of: 5,
+                            reason: "overloaded", seconds: 20, retry_in: 20,
+                            model: "claude-sonnet-5", falling_back: true });
+  return document.getElementById("segmentWait").innerText;
+});
+check("wait: a fallback is named before the other model answers",
+      /claude-opus-5/.test(fell) && /claude-sonnet-5/.test(fell),
+      fell.split("\n").find((l) => /instead/.test(l)) || fell);
+
+const limited = await page.evaluate(() => {
+  drawWait("segmentWait", { running: true, phase: "waiting", attempt: 2, of: 5,
+                            reason: "rate_limit", seconds: 3, retry_in: 3 });
+  return document.getElementById("segmentWait").innerText;
+});
+check("wait: a rate limit is not described as an outage",
+      /rate limited/i.test(limited) && !/capacity/i.test(limited),
+      limited.split("\n")[0]);
+
+// Attempt one going normally is what the button already says; a second line
+// repeating it is noise.
+const quiet = await page.evaluate(() => {
+  drawWait("segmentWait", { running: true, phase: "calling", attempt: 1, of: 5 });
+  return document.getElementById("segmentWait").innerHTML;
+});
+check("wait: a first attempt going fine says nothing", quiet === "", quiet);
+
+const retryQuiet = await page.evaluate(() => {
+  drawWait("segmentWait", { running: true, phase: "calling", attempt: 3, of: 5 });
+  return document.getElementById("segmentWait").innerText;
+});
+check("wait: a later attempt still says which one it is on",
+      /attempt 3 of 5/.test(retryQuiet), retryQuiet);
+
+const done = await page.evaluate(() => {
+  drawWait("segmentWait", { running: false });
+  return document.getElementById("segmentWait").innerHTML;
+});
+check("wait: nothing lingers once the call is over", done === "", done);
+
 // ---------------------------------------------------------------- cancels
 for (const [id, label] of [["cancelSegmentBtn", "segment"],
                            ["cancelNarrBtn", "narration"]]) {

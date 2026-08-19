@@ -8,6 +8,7 @@ flag (FR-303, FR-806, NFR-3).
 from __future__ import annotations
 
 import secrets
+import time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
@@ -315,6 +316,14 @@ def api_status() -> dict:
         "claude_model": config.SEGMENT_MODEL,
         "max_story_chars": config.MAX_STORY_CHARS,
         "workers": config.WORKERS,
+        # What the page tells the user while it waits out a 529. Published for
+        # the same reason the story limit is: repeating it in the markup means
+        # it disagrees with config.py the moment anyone tunes it, and disagrees
+        # silently -- the page would count down to a retry that already happened.
+        "claude_attempts": config.CLAUDE_ATTEMPTS,
+        "claude_backoff": list(config.CLAUDE_BACKOFF),
+        "claude_patience": config.claude_patience_seconds(),
+        "claude_fallback": config.FALLBACK_CLAUDE_MODEL,
         "projects_dir": str(config.PROJECTS_DIR),
     }
 
@@ -523,7 +532,7 @@ def api_segment(pid: str, body: SegmentRequest) -> dict:
     eng = engines.engine(project["engine"])
 
     try:
-        with orchestrator.running_call(pid, orchestrator.KIND_SEGMENT) as stop:
+        with orchestrator.running_call(pid, orchestrator.KIND_SEGMENT) as call:
             result = compiler.segment(
                 project.get("story", ""), count,
                 style_hint=hint,
@@ -532,7 +541,8 @@ def api_segment(pid: str, body: SegmentRequest) -> dict:
                 dialect_notes=eng.get("dialect", {}).get("notes", []),
                 prompt_language=prompt_lang,
                 pid=pid,
-                stop=stop,
+                progress=call.note,
+                stop=call,
             )
     except compiler.Cancelled:
         raise _cancelled("Segmenting") from None
@@ -606,6 +616,28 @@ def api_segment(pid: str, body: SegmentRequest) -> dict:
 # Step 3: preview cost, then spend
 # --------------------------------------------------------------------------- #
 
+@app.get("/api/projects/{pid}/claude/{phase}")
+def api_claude_progress(pid: str, phase: str) -> dict:
+    """What the Claude call for this phase is doing, while it is still doing it.
+
+    The retry ladder runs inside the POST that started it, so this is the only
+    way the page can tell a slow answer from four refusals and a wait. Cheap,
+    read-only, and safe to poll: it reads a dict two threads share and nothing
+    else.
+
+    `retry_in` is computed here rather than published as a deadline, because the
+    page should not have to agree with this machine about what time it is.
+    """
+    _load(pid)
+    if phase not in (orchestrator.KIND_SEGMENT, orchestrator.KIND_NARRATION):
+        raise HTTPException(404, f"No Claude phase called {phase!r}.")
+    state = orchestrator.call_state(pid, phase)
+    retry_at = state.pop("retry_at", None)
+    if retry_at is not None:
+        state["retry_in"] = max(0.0, round(retry_at - time.time(), 1))
+    return state
+
+
 @app.post("/api/projects/{pid}/segment/cancel")
 def api_cancel_segment(pid: str) -> dict:
     """Stop a segmentation in flight. Safe to press when nothing is running."""
@@ -670,7 +702,7 @@ def api_narration(pid: str, body: NarrationRequest) -> dict:
         settings["seconds_per_scene"] = max(2, min(int(body.seconds_per_scene), 60))
 
     try:
-        with orchestrator.running_call(pid, orchestrator.KIND_NARRATION) as stop:
+        with orchestrator.running_call(pid, orchestrator.KIND_NARRATION) as call:
             lines = narration_mod.generate(
                 project.get("story", ""), project.get("scenes", []),
                 voice=settings.get("voice", ""),
@@ -678,7 +710,8 @@ def api_narration(pid: str, body: NarrationRequest) -> dict:
                 language=project.get("language"),
                 api_key=config.anthropic_key(),
                 pid=pid,
-                stop=stop,
+                progress=call.note,
+                stop=call,
             )
     except compiler.Cancelled:
         raise _cancelled("Writing the narration") from None
