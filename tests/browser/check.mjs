@@ -243,6 +243,66 @@ const overOk = await page.evaluate(() => {
 });
 check("limit: one character past it reads as over", overOk);
 
+// -------------------------------------------------- the prompts, before paying
+// Which prompts are risky is settled in tests/test_prompt_risk.py against the
+// real compiler. What only a browser can show is the panel above the spend
+// button: that it names where the phrase is, quotes the money, and does not
+// pretend to be a gate.
+const riskState = (risk, count, estimate) => page.evaluate((state) => {
+  PLAN = { risk: state.risk, count: state.count, estimate: state.estimate };
+  renderRisk();
+  return document.getElementById("planRisk").innerText;
+}, { risk, count, estimate });
+
+const UNDRESS = {
+  code: "undress", severity: "warn", matched: ["no pants"],
+  message: "This asks for clothing to be removed or absent ({matched}).",
+  suggestion: "Say what they are wearing, not what they are not.",
+  scenes: [2, 5], anchors: [],
+};
+
+const quietRisk = await riskState({ worst: null, findings: [] }, 6, 0.54);
+check("risk: a clean plan shows nothing", quietRisk === "", quietRisk);
+
+const risky = await riskState({ worst: "warn", findings: [UNDRESS] }, 6, 0.54);
+check("risk: it quotes the words that triggered it",
+      /no pants/.test(risky), risky.split("\n")[1]);
+check("risk: it says which scenes they are in",
+      /In scenes 2, 5/.test(risky), risky);
+check("risk: it says what a refusal costs",
+      /\$0\.54/.test(risky) && /billed like any other/.test(risky),
+      risky.split("\n").find((l) => /\$/.test(l)));
+check("risk: it does not pretend to be a gate",
+      /Render anyway/.test(risky) && !(await page.locator("#renderBtn").isDisabled()));
+check("risk: a likely refusal is headed as a warning",
+      (await page.locator("#planRisk > div").first().getAttribute("class")) === "warn");
+
+// A phrase in the shared block is in every prompt. Listing all six scene
+// numbers hides the one fact worth having: it is the block, not a scene.
+const everywhere = await riskState(
+  { worst: "warn", findings: [{ ...UNDRESS, scenes: [1, 2, 3, 4, 5, 6] }] }, 6, 0.54);
+check("risk: a phrase in every prompt is called the style block, not six scenes",
+      /shared style block/.test(everywhere) && !/In scenes 1, 2/.test(everywhere),
+      everywhere.split("\n").find((l) => /block|scenes/.test(l)));
+
+const portrait = await riskState({ worst: "note", findings: [{
+  code: "negation", severity: "note", matched: ["never removes"],
+  message: "This tells the engine what not to draw ({matched}).",
+  suggestion: "Rewrite it as something to include.",
+  scenes: [], anchors: ["mona"] }] }, 6, 0.54);
+check("risk: a character portrait is named by who it is of",
+      /reference portrait for mona/.test(portrait), portrait);
+check("risk: a quality note is not dressed up as a refusal",
+      (await page.locator("#planRisk > div").first().getAttribute("class")) === "note"
+      && (await page.locator("#planRisk .warn").count()) === 0);
+// It risks no money and there is nothing to overrule, so it is not given the
+// price of the batch or an invitation to go ahead anyway.
+check("risk: a note is not priced or argued with",
+      !/billed like any other/.test(portrait) && !/Render anyway/.test(portrait),
+      portrait);
+
+await page.evaluate(() => { document.getElementById("planRisk").innerHTML = ""; });
+
 // ------------------------------------------------------- style direction check
 // The Python suite proves the rules and the endpoint. What it cannot prove is
 // that the warning reaches the screen, that it clears when the text is fixed,
