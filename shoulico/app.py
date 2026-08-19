@@ -212,6 +212,13 @@ def _decorate(project: dict) -> dict:
                   if using_cast else [])
         stale_refs = bool(scene.get("asset")) and list(
             scene.get("asset_refs") or []) != tokens
+        # An edited line dates the recording exactly as an edited prompt dates
+        # the picture, and the server has always known it -- plan_audio re-speaks
+        # a scene whose text moved. Nothing said so anywhere else, so a scene
+        # whose narration had been rewritten still read as finished, and the
+        # export shipped the voice of a sentence no longer in the project.
+        stale_audio = bool(scene.get("audio")) and (
+            (scene.get("audio_text") or "") != text.strip())
         scenes.append({
             **scene,
             "compiled_prompt": prompt,
@@ -222,12 +229,25 @@ def _decorate(project: dict) -> dict:
             "dirty": bool(scene.get("asset")) and (
                 scene.get("asset_prompt") != prompt or stale_refs),
             "stale_references": stale_refs,
+            "audio_dirty": stale_audio,
             "narration_words": count,
             "narration_unit": unit,
             "narration_seconds": seconds,
         })
     out = dict(project)
     out["scenes"] = scenes
+    # What this project would disown if it were handed over as it stands.
+    # Every step that cuts or ships work reads this one summary, so "out of
+    # date" means the same thing in the gallery, at the assembly and at the
+    # door -- three computations of it would eventually disagree, and the
+    # disagreement would show up as a finished video nobody could explain.
+    out["stale"] = {
+        "images": [s["n"] for s in scenes if s["dirty"]],
+        "audio": [s["n"] for s in scenes if s["audio_dirty"]],
+        "missing_images": [s["n"] for s in scenes if not s.get("asset")],
+        "unspoken": [s["n"] for s in scenes
+                     if (s.get("narration") or "").strip() and not s.get("audio")],
+    }
     out["consistency_active"] = using_cast
     out["supports_references"] = engines.supports_references(project["engine"])
     out["cast"] = [
@@ -906,11 +926,27 @@ def api_captions(pid: str, fmt: str):
 
 @app.post("/api/projects/{pid}/export")
 def api_export(pid: str, body: ExportRequest) -> dict:
-    project = _load(pid)
+    """Copy the work out, and say plainly which of it is out of date.
+
+    Decorated deliberately: staleness is _decorate's answer and export reports
+    it rather than working it out again. Export is the last place the project
+    is still able to say "this picture is not the one this prompt would make
+    now" -- after this the files are in an editor, cut into a video, and the
+    only evidence left is that something looks wrong.
+
+    It still exports. Stale work is often exactly what somebody wants -- the
+    render they liked, kept deliberately -- and a blocked export would just be
+    worked around. What it must not do is stay quiet.
+    """
+    project = _decorate(_load(pid))
     store.write_narration_files(pid, project)
     result = store.export(pid, project, flatten=body.flatten)
+    stale = result.get("stale") or {}
     activity.record(pid, "export.written", flatten=body.flatten,
                     files=len(result.get("files") or []),
+                    stale_images=len(stale.get("images") or []),
+                    stale_audio=len(stale.get("audio") or []),
+                    missing_images=len(stale.get("missing_images") or []),
                     dir=result.get("dir"))
     return result
 

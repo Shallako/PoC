@@ -346,6 +346,59 @@ models that advertise "native audio" are not used for this -- they invent
 ambience and dialogue from the image prompt and cannot be handed an approved
 script, so pictures move and TTS speaks.
 
+**Work that is out of date says so, at the door.** Both halves of the app are
+idempotent on their input, and both have always known when their output stopped
+matching it: `plan` will not skip a scene whose compiled prompt has moved,
+`plan_audio` re-speaks a line that was edited after it was spoken. That
+knowledge stayed where the work was made. Step 4 cut a video and step 5 wrote an
+export folder without asking, so a picture kept from before a prompt was
+rewritten, and the recording of a sentence that is no longer in the script,
+travelled out under the current project's name in silence.
+
+Export is the last moment the project can still speak. After it the files are in
+an editor, and the only remaining evidence is that something looks wrong.
+
+    ┌────────────────────────────────────────────────────────────────┐
+    │ Some of this would be handed over out of date                  │
+    │ Pictures that are not what their prompt would make now —       │
+    │ scenes 2, 5 (2 of 7). Re-render in step 2 first, or go ahead:  │
+    │ they travel exactly as you see them.                           │
+    │ Lines edited after they were spoken — scenes 3. The recording  │
+    │ is the old sentence, and the caption timings follow the        │
+    │ recording.                                                     │
+    │ No image at all — scenes 7. Left out of the folder entirely,   │
+    │ not left blank.                                                │
+    │ Nothing here is blocked. Out-of-date work is often the work    │
+    │ you meant to keep — this only makes sure it is not a surprise. │
+    └────────────────────────────────────────────────────────────────┘
+
+**Nothing is gated on it.** Keeping a render you liked after tweaking its prompt
+is a normal thing to want, and a gate would be clicked through the second time
+it appeared. The export still writes every file it would have written before.
+What it no longer does is stay quiet.
+
+**A scene with no image is reported, not dropped.** It never was exported --
+there is nothing to copy -- but a twelve-scene project quietly writing nine
+files is the same failure as shipping a stale one and considerably harder to
+notice, because nothing is wrong with what is there.
+
+**One answer, read three times.** `_decorate` computes it: `dirty` per scene as
+before, `audio_dirty` beside it, and a project-level `stale` summary of
+`images`, `audio`, `missing_images` and `unspoken`. The gallery badge, the
+warning above *Assemble the video*, the warning above *Write export folder* and
+the export's own receipt all read that one summary; `store.export` reports it
+rather than working it out again. Three computations of "out of date" would
+eventually disagree, and the disagreement would surface as a finished video
+nobody could account for.
+
+Only the cut mentions a line that has not been spoken at all. That is not stale
+work -- it is a scene whose length is still a word-count estimate, and the
+estimate runs about 30% long, so it moves the runtime and nothing else.
+
+`export.written` in the activity ledger carries the counts, so "why does the
+video show the old picture" is answerable after the fact, from the same place
+the money is.
+
 **What a story actually cost.** `manifest.json` is a good provenance record and
 it has one expensive blind spot: it only records successes. A generation that was
 billed and produced nothing -- a 451 content rejection, a download that died
@@ -939,7 +992,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 379 offline tests, free
+    .venv\Scripts\python -m pytest             # 394 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium

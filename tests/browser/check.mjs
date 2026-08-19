@@ -254,6 +254,68 @@ const done = await page.evaluate(() => {
 });
 check("wait: nothing lingers once the call is over", done === "", done);
 
+// --------------------------------------------------------------- out of date
+// Which work is stale is settled in tests/test_stale.py against the real
+// project. What only a browser can show is whether the warning is on screen at
+// the two places work leaves the project -- the cut and the export -- and
+// whether it stays out of the way when there is nothing to say.
+const staleState = (st) => page.evaluate((stale) => {
+  P.stale = stale;
+  renderStale("videoStale", "stale.cut.h", true);
+  renderStale("exportStale", "stale.export.h", false);
+  return { cut: document.getElementById("videoStale").innerText,
+           exp: document.getElementById("exportStale").innerText };
+}, st);
+
+const clean = await staleState(
+  { images: [], audio: [], missing_images: [], unspoken: [] });
+check("stale: a project with nothing out of date shows nothing",
+      clean.cut === "" && clean.exp === "", clean.cut + clean.exp);
+
+const messy = await staleState(
+  { images: [2, 5], audio: [3], missing_images: [7], unspoken: [4] });
+check("stale: the export warns before the button, not after the folder",
+      /2 of \d+/.test(messy.exp) && /scenes 2, 5/.test(messy.exp),
+      messy.exp.split("\n")[1]);
+check("stale: an edited line is called out separately from a stale picture",
+      /edited after they were spoken/.test(messy.exp)
+      && /scenes 3/.test(messy.exp));
+check("stale: a scene with no image is named rather than silently dropped",
+      /Left out of the folder entirely/.test(messy.exp) && /scenes 7/.test(messy.exp));
+check("stale: it says plainly that nothing is blocked",
+      /Nothing here is blocked/.test(messy.exp), messy.exp.split("\n").pop());
+
+// An unspoken line is not out of date -- it is an estimate, and only the cut's
+// runtime depends on it. The export copies the text either way.
+check("stale: only the cut mentions lines that have no voice yet",
+      /word-count estimate/.test(messy.cut) && !/word-count estimate/.test(messy.exp));
+
+// Warnings are amber, not decoration: it has to be a .warn box, or it reads as
+// another hint and gets skipped like every other hint on the page. Asserted
+// while something is still wrong -- the box is empty once nothing is.
+check("stale: the warning is a warning",
+      (await page.locator("#exportStale .warn").count()) === 1);
+
+// One scene, not two: "1 lines were edited" is how a warning starts reading as
+// machine output, and the counts here come from the server every time.
+const one = await staleState(
+  { images: [4], audio: [], missing_images: [], unspoken: [] });
+check("stale: a single scene reads as English, not as a count",
+      !/1 lines|1 scenes/.test(one.exp) && /scenes 4/.test(one.exp),
+      one.exp.split("\n")[1]);
+
+const onlyUnspoken = await staleState(
+  { images: [], audio: [], missing_images: [], unspoken: [4] });
+check("stale: an export with only unspoken lines stays quiet",
+      onlyUnspoken.exp === "" && /word-count estimate/.test(onlyUnspoken.cut),
+      onlyUnspoken.exp);
+
+await page.evaluate(() => {
+  P.stale = { images: [], audio: [], missing_images: [], unspoken: [] };
+  renderStale("videoStale", "stale.cut.h", true);
+  renderStale("exportStale", "stale.export.h", false);
+});
+
 // ---------------------------------------------------------------- cancels
 for (const [id, label] of [["cancelSegmentBtn", "segment"],
                            ["cancelNarrBtn", "narration"]]) {
