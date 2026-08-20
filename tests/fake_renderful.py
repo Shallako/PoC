@@ -119,8 +119,12 @@ class FakeRenderful:
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(self))
         self.root = f"http://127.0.0.1:{self._server.server_address[1]}"
         self.base = self.root + "/api/v1"
-        threading.Thread(target=self._server.serve_forever, daemon=True,
-                         name="fake-renderful").start()
+        # poll_interval, not the 0.5s default: shutdown() blocks for up to one
+        # interval, and this server is started and stopped once per test. Half a
+        # second of doing nothing, a few hundred times, was most of the suite's
+        # runtime -- the tests themselves are fast.
+        threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.01},
+                         daemon=True, name="fake-renderful").start()
         return self
 
     def stop(self) -> None:

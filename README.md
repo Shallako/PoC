@@ -1118,6 +1118,24 @@ and is the only thing here that can prove a textarea keeps its text, its focus
 and its caret while the page redraws underneath it. It needs a Node toolchain,
 so it stays out of `pytest` -- see `tests/browser/README.md`.
 
+**It runs in well under a minute, and two lines are why.** It took two and a
+half minutes, and almost none of that was the tests -- it was waiting.
+
+`ThreadingHTTPServer.serve_forever` polls every 500ms by default, and
+`shutdown()` blocks for up to one poll. The fake Renderful is started and
+stopped once per test, so most of the suite was half a second of nothing, a few
+hundred times over. It polls every 10ms now.
+
+The other is `_FastClock` in `conftest.py`, which caps how long a backoff sleeps.
+The cap is per *step*, and `compiler._sleep` walks a backoff in
+`CANCEL_POLL_SECONDS` steps so it can notice a cancel part-way through -- so a
+31-second ladder is about 124 steps however short each one is, and at 20ms
+apiece that was two and a half seconds per retry test. The step is 1ms now. The
+number of steps is what those tests are about; the length of one is not.
+
+Both are test-harness changes. Nothing in `shoulico/` sleeps differently, and
+the suite proves what it proved before -- it just stopped waiting to do it.
+
 The offline suite drives the real FastAPI app against a fake Renderful HTTP
 server on loopback and a fake Anthropic client, so the retry ladder, poll loop,
 4xx split and file writing all execute for real. An autouse fixture turns any

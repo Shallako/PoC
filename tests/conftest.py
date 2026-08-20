@@ -36,9 +36,16 @@ STORY = (
 
 
 class _FastClock:
-    """time.sleep with the waits scaled down; time.time left alone."""
+    """time.sleep with the waits scaled down; time.time left alone.
 
-    cap = 0.02
+    The cap is per *step*, not per wait, and compiler._sleep walks a backoff in
+    CANCEL_POLL_SECONDS steps so it can notice a cancel part-way through. A
+    31-second ladder is therefore about 124 steps however short each one is, and
+    at 20ms apiece that was two and a half seconds of real waiting per test. The
+    number of steps is the thing under test -- the length of one is not.
+    """
+
+    cap = 0.001
 
     def sleep(self, seconds):
         _time.sleep(min(seconds, self.cap))
