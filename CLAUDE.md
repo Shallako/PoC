@@ -54,7 +54,7 @@ the fallback for a code this build has never heard of.
 
 ## Tests
 
-`.venv\Scripts\python -m pytest` -- 433 offline tests, free, under a minute. It
+`.venv\Scripts\python -m pytest` -- 440 offline tests, free, under a minute. It
 drives the real FastAPI app against a fake Renderful HTTP server on loopback and
 a fake Anthropic client, so retries, polling, the 4xx split and file writing all
 execute for real. An autouse fixture fails any non-loopback request, so the

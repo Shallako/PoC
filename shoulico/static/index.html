@@ -531,6 +531,8 @@ const DYN = {
   "plan.anchors.left": "Out of date but not needed here — {names}. No selected scene has them in it, so they are not rendered and not billed.",
   "plan.nokey": "No Renderful API key found. Set RENDERFUL_API_KEY or put the key in api_key.txt, then restart.",
   "plan.unverified": "This engine is marked unverified in engines.json. Render one scene before committing to a batch.",
+  "proj.new": "— New project —",
+
   "risk.title": "These prompts may be refused by the image service",
   "risk.note.title": "Worth knowing about these prompts",
   "risk.scenes": "In scenes {list}.",
@@ -551,7 +553,6 @@ const DYN = {
   "confirm.render.many": "Send {count} image requests to Renderful{cost}?\n\nThis spends real credit.",
   "confirm.cost": " (about {cost})",
   "confirm.delete": "Delete \"{name}\" and everything in its folder?",
-  "prompt.newProject": "Project name",
   "prompt.newProject.default": "Untitled story",
   "err.details": "Technical details",
   "err.reqid": "Anthropic request id: {id}",
@@ -837,7 +838,8 @@ function renderEngines() {
       <span>${tf("engine.price", { price: money(e.price_per_image) })}${e.clip
         ? " · " + escapeHtml(tf("engine.clipPrice", { price: money(e.clip.price_per_clip) })) : ""}</span>`;
     div.onclick = async () => {
-      try { P = await api(`/projects/${P.id}`, "PATCH", { engine: e.key }); redraw(); }
+      try { await ensureProject();
+            P = await api(`/projects/${P.id}`, "PATCH", { engine: e.key }); redraw(); }
       catch (err) { alertBox(err); }
     };
     list.appendChild(div);
@@ -850,7 +852,8 @@ function renderEngines() {
     : "";
 
   renderParams($("engineParams"), eng.inputs, P.params || {}, async (params) => {
-    try { P = await api(`/projects/${P.id}`, "PATCH", { params }); clearAlerts(); redraw(); }
+    try { await ensureProject();
+          P = await api(`/projects/${P.id}`, "PATCH", { params }); clearAlerts(); redraw(); }
     catch (err) { alertBox(err); }
   });
   renderClip(eng);
@@ -873,7 +876,8 @@ function renderClip(eng) {
       <ul class="muted">${eng.clip.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}
       <li>${escapeHtml(eng.clip.price_note)}</li></ul></details>` : ""}`;
   renderParams($("clipParams"), eng.clip.inputs, P.clip_params || {}, async (clip_params) => {
-    try { P = await api(`/projects/${P.id}`, "PATCH", { clip_params }); clearAlerts(); redraw(); }
+    try { await ensureProject();
+          P = await api(`/projects/${P.id}`, "PATCH", { clip_params }); clearAlerts(); redraw(); }
     catch (err) { alertBox(err); }
   });
 }
@@ -1699,6 +1703,9 @@ function redraw(refill) {
   renderStale("videoStale", "stale.cut.h", true);
   renderStale("exportStale", "stale.export.h", false);
   $("cbSpent").textContent = money((P.spend && P.spend.actual) || 0);
+  // A draft is not on disk, so there is nothing to delete and the button says
+  // so by being off rather than by explaining itself after the press.
+  $("deleteProjectBtn").disabled = !P.id;
   if (P.job && P.job.running && !POLL) startPolling();
   if (P.audio_job && P.audio_job.running && !TTS_POLL) startAudioPolling();
   if (P.video_job && P.video_job.running && !VIDEO_POLL) startVideoPolling();
@@ -1750,11 +1757,14 @@ async function loadProjectsInner(seq, selectId) {
   const list = await api("/projects");
   if (seq !== LOAD_SEQ) return false;          // a newer load started; it wins
   const sel = $("projectPicker");
-  sel.innerHTML = list.map((p) =>
-    `<option value="${p.id}">${escapeHtml(p.name)} — ${p.rendered}/${p.scenes}</option>`).join("");
-  if (!list.length) return false;
-  sel.value = selectId && list.some((p) => p.id === selectId) ? selectId : list[0].id;
-  const loaded = await api(`/projects/${sel.value}`);
+  sel.innerHTML = pickerOptions(list);
+  // No id asked for means the blank one. Boot used to land on list[0], so
+  // starting the app put you back inside the last thing you did -- with its
+  // story in the box -- when the reason to open it is nearly always the next
+  // story. Deleting a project used to drop you into someone else's for the
+  // same reason.
+  sel.value = (selectId && list.some((p) => p.id === selectId)) ? selectId : "";
+  const loaded = await api(sel.value ? `/projects/${sel.value}` : "/draft");
   // Checked again after the second await, and before P is assigned: the whole
   // point is that a load which has been superseded touches nothing at all.
   if (seq !== LOAD_SEQ) return false;
@@ -1762,6 +1772,23 @@ async function loadProjectsInner(seq, selectId) {
   renderAll();
   await applyLanguage();
   return true;
+}
+
+function pickerOptions(list) {
+  return `<option value="">${escapeHtml(t("proj.new"))}</option>` +
+    list.map((p) =>
+      `<option value="${p.id}">${escapeHtml(p.name)} — ${p.rendered}/${p.scenes}</option>`)
+      .join("");
+}
+
+// The list, without touching the project on screen. ensureProject() has just
+// created what the user is in the middle of typing into, so a reload here would
+// refill the form from the server and take the style direction with it.
+async function refreshPicker(selectId) {
+  const list = await api("/projects");
+  const sel = $("projectPicker");
+  sel.innerHTML = pickerOptions(list);
+  sel.value = selectId || "";
 }
 
 async function boot() {
@@ -1776,20 +1803,37 @@ async function boot() {
   // holds {storyMax} for the server to fill in.
   applyStatic();
   renderKeys();
-  const have = await loadProjects();
-  if (!have) await newProject();
+  await loadProjects();          // the picker, and a blank story to open on
   goStep(1);
   const warn = STATUS.keys.anthropic_warning;
   if (warn) alertBox(warn, "warn");
   else if (!STATUS.keys.anthropic) alertBox(t("boot.nokey"), "warn");
 }
 
+// New is a blank form, not a directory. It used to prompt for a name and write
+// the project immediately, so pressing it and changing your mind left an empty
+// project behind -- and the name had to be decided before the story was, which
+// is the wrong way round.
 async function newProject() {
-  const name = prompt(t("prompt.newProject"), t("prompt.newProject.default"));
-  if (name === null) return;
-  P = await api("/projects", "POST", { name: name || t("prompt.newProject.default") });
-  await loadProjects(P.id);
+  await loadProjects("");
   goStep(1);
+}
+
+// A draft becomes real the moment something has to be remembered: a setting the
+// server validates, or a story to segment. Everything before that -- opening
+// the app, reading it, typing -- writes nothing.
+//
+// The picker is refreshed rather than reloaded: the user is mid-form, and
+// loadProjects() would refill it from what was just saved and drop whatever has
+// not been sent yet.
+async function ensureProject() {
+  if (P.id) return;
+  P = await api("/projects", "POST", {
+    name: $("projName").value.trim() || t("prompt.newProject.default"),
+    story: $("story").value,
+    engine: P.engine,
+  });
+  await refreshPicker(P.id);
 }
 
 // ------------------------------------------------------------------ wiring
@@ -1808,8 +1852,9 @@ $("sceneCount").addEventListener("input", updateSceneCount);
 $("projectPicker").addEventListener("change", (e) => loadProjects(e.target.value));
 $("newProjectBtn").onclick = () => newProject().catch((e) => alertBox(e));
 $("deleteProjectBtn").onclick = async () => {
+  if (!P.id) return;                       // a draft is not on disk to delete
   if (!confirm(tf("confirm.delete", { name: P.name }))) return;
-  try { await api(`/projects/${P.id}`, "DELETE"); if (!await loadProjects()) await newProject(); }
+  try { await api(`/projects/${P.id}`, "DELETE"); await loadProjects(); }
   catch (err) { alertBox(err); }
 };
 $("uiLang").addEventListener("change", async (e) => {
@@ -1818,13 +1863,15 @@ $("uiLang").addEventListener("change", async (e) => {
   await applyLanguage();
 });
 $("promptLang").addEventListener("change", async (e) => {
-  try { P = await api(`/projects/${P.id}`, "PATCH", { prompt_language: e.target.value }); }
+  try { await ensureProject();
+        P = await api(`/projects/${P.id}`, "PATCH", { prompt_language: e.target.value }); }
   catch (err) { alertBox(err); }
 });
 
 $("consistency").addEventListener("change", async (e) => {
   clearAlerts();
   try {
+    await ensureProject();
     P = await api(`/projects/${P.id}`, "PATCH",
                   { consistency: e.target.checked ? "cast" : "off" });
     redraw();
@@ -2124,6 +2171,7 @@ $("segmentBtn").onclick = async () => {
   $("cancelSegmentBtn").classList.remove("hidden");
   startClaudeWatch("segment");
   try {
+    await ensureProject();
     P = await api(`/projects/${P.id}`, "PATCH", {
       name: $("projName").value, story: $("story").value,
       style_hint: $("styleHint").value, scene_count: Number($("sceneCount").value),

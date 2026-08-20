@@ -24,6 +24,11 @@ Seed a project with scenes (so nothing calls a paid API), start the app, then:
 
 Exit status is 0 when every check passes. It asserts:
 
+* the page opens on a blank new project rather than the last one worked on,
+  with the existing projects one click away, nothing to delete, and no project
+  written by opening or reloading;
+* choosing *New project* clears the form and still writes nothing, and picking a
+  setting is what finally writes it -- under the name typed into the form;
 * step 1 keeps the story and the image count across a settings redraw;
 * the image count takes both bounds from the server and says the limit out loud,
   in red once it is passed;

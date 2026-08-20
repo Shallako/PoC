@@ -410,6 +410,26 @@ words, and segmentation refuses before the first billed call rather than after
 it. `compiler` still clamps: that is the floor under the Claude call, and it has
 to hold a project saved before any of this existed.
 
+**The page opens on a blank story.** It used to open the most recent project,
+so starting the app put you back inside the last thing you did -- its story in
+the box, its scenes in step 2 -- when the reason to open it is nearly always the
+next story. Now boot lands on a new project, with every existing one still one
+click away in the picker.
+
+**Nothing is written until something has to be remembered.** *New project* used
+to prompt for a name and create the project on the spot, so pressing it and
+changing your mind left an empty directory behind -- and the name had to be
+decided before the story was, which is the wrong way round. It is a blank form
+now. The project is written when the first thing needs persisting: a setting the
+server validates, or a story to segment. Opening the app, reading it and typing
+into it write nothing at all.
+
+`GET /api/draft` is where the blank one comes from. It is `store.blank()` --
+the same function `store.create()` builds its project with -- decorated like a
+real one and saved nowhere. The page could have assembled a blank object itself,
+and then a draft would be missing whichever key was added last, and the page
+would throw on its first redraw, at boot, with nothing on screen to say why.
+
 **Work that is out of date says so, at the door.** Both halves of the app are
 idempotent on their input, and both have always known when their output stopped
 matching it: `plan` will not skip a scene whose compiled prompt has moved,
@@ -1110,7 +1130,7 @@ Video assembly and SRT/VTT captions were on this list and are now built -- steps
 ## Tests
 
     .venv\Scripts\pip install -r requirements-dev.txt
-    .venv\Scripts\python -m pytest             # 433 offline tests, free
+    .venv\Scripts\python -m pytest             # 440 offline tests, free
     .venv\Scripts\python -m pytest -m live --live -s   # 2 live tests, ~$0.05
 
 There is a third, opt-in: `tests/browser/` drives the wizard in a real Chromium
