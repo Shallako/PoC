@@ -168,13 +168,17 @@ def exists(pid: str) -> bool:
     return project_file(pid).is_file()
 
 
-def create(name: str, story: str = "", *, engine: str | None = None,
-           scene_count: int = config.DEFAULT_SCENE_COUNT) -> dict:
-    base = project_slug(name) or "project"
-    pid, i = base, 2
-    while exists(pid):
-        pid, i = f"{base}-{i}", i + 1
+def blank(name: str = "", story: str = "", *, pid: str = "",
+          engine: str | None = None,
+          scene_count: int = config.DEFAULT_SCENE_COUNT) -> dict:
+    """A project as it starts, in memory and on nothing.
 
+    create() writes one of these. The page also asks for one, to open on a
+    blank story rather than on whatever was worked on last -- and it asks
+    rather than assembling one in JavaScript, because a draft missing a field
+    the page reads is a draft that throws on the first redraw, and because two
+    definitions of "a new project" drift the moment either gains a key.
+    """
     engine_key = engine or engines.default_engine_key()
     voice_key = engines.default_voice_key()
     video_key = engines.default_video_key()
@@ -220,6 +224,17 @@ def create(name: str, story: str = "", *, engine: str | None = None,
         "scenes": [],
         "spend": {"images": 0, "lines": 0, "actual": 0.0},
     }
+    return project
+
+
+def create(name: str, story: str = "", *, engine: str | None = None,
+           scene_count: int = config.DEFAULT_SCENE_COUNT) -> dict:
+    base = project_slug(name) or "project"
+    pid, i = base, 2
+    while exists(pid):
+        pid, i = f"{base}-{i}", i + 1
+
+    project = blank(name, story, pid=pid, engine=engine, scene_count=scene_count)
     for d in (images_dir(pid), narration_dir(pid), audio_dir(pid),
               video_dir(pid), cast_dir(pid), export_dir(pid)):
         d.mkdir(parents=True, exist_ok=True)

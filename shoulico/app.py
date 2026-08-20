@@ -370,6 +370,22 @@ def api_status() -> dict:
     }
 
 
+@app.get("/api/draft")
+def api_draft() -> dict:
+    """A project that does not exist yet.
+
+    The page opens on a blank story rather than on whatever was worked on last,
+    and nothing is written until there is something to remember -- a setting the
+    server has to validate, or a story to segment. Opening the app and reading
+    it used to be enough to reopen the previous project; pressing New and
+    changing your mind used to leave a directory behind.
+
+    Decorated like a real project, and built by store.blank() rather than
+    assembled in the page, so the draft and the thing it becomes cannot drift.
+    """
+    return _decorate(store.blank())
+
+
 @app.get("/api/engines")
 def api_engines() -> dict:
     return engines.public_registry()

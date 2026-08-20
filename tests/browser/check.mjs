@@ -33,24 +33,61 @@ page.on("console", (m) => {
   if (m.type() === "error") noise.push(`console: ${m.text()}`);
 });
 
+const projectCount = () =>
+  page.evaluate(() => fetch("/api/projects").then((r) => r.json()).then((l) => l.length));
+
 await page.goto(baseUrl, { waitUntil: "networkidle" });
 // `P` is declared with let, so it lives in the global lexical scope and is not
-// a property of window -- reachable by bare name, not as window.P.
+// a property of window -- reachable by bare name, not as window.P. A draft's id
+// is empty, so what says the page is ready is that no load is still in flight.
 await page.waitForFunction(
-  () => typeof P !== "undefined" && P && P.id, null, { timeout: 15000 });
+  () => typeof P !== "undefined" && P && LOAD_SETTLED === LOAD_SEQ,
+  null, { timeout: 15000 });
+
+// ------------------------------------------------------------ the blank slate
+// Boot opened the most recent project, so starting the app put you back inside
+// the last thing you did, with its story in the box -- when the reason to open
+// it is nearly always the next story.
+const booted = await page.evaluate(() => ({
+  id: P.id, name: P.name, story: P.story, scenes: P.scenes.length,
+  picked: document.getElementById("projectPicker").value,
+  options: document.getElementById("projectPicker").options.length,
+}));
+check("boot: the page opens on a new project, not the last one",
+      booted.id === "" && booted.picked === "", JSON.stringify(booted));
+check("boot: with an empty story and no scenes",
+      booted.story === "" && booted.scenes === 0
+      && (await page.inputValue("#story")) === "",
+      `story=${JSON.stringify(await page.inputValue("#story"))}`);
+check("boot: the existing projects are still one click away",
+      booted.options > 1, `${booted.options} options`);
+check("boot: there is nothing to delete yet",
+      await page.locator("#deleteProjectBtn").isDisabled());
+
+// The half that costs something if it is wrong: opening the app must not write
+// a project. New used to create one the moment it was pressed, so changing your
+// mind left an empty directory behind.
+const before = await projectCount();
+await page.reload({ waitUntil: "networkidle" });
+await page.waitForFunction(
+  () => typeof P !== "undefined" && P && LOAD_SETTLED === LOAD_SEQ,
+  null, { timeout: 15000 });
+check("boot: opening the page writes no project",
+      (await projectCount()) === before, `${before} before`);
 
 // Load the seeded project rather than whatever happened to be first.
 //
-// Waiting on P.id alone is not enough and was intermittently wrong: boot opens
-// the first project in the list, which is often this one, so P.id matches
-// before the reload this selectOption just triggered has finished -- and that
-// reload then refills the form over whatever the check typed. LOAD_SETTLED is
-// what says no load is still in flight.
+// Waiting on P.id alone was intermittently wrong while boot opened the first
+// project in the list: it is often this one, so P.id matched before the reload
+// this selectOption triggered had finished, and that reload then refilled the
+// form over whatever the check had typed. LOAD_SETTLED is what says no load is
+// still in flight.
 await page.selectOption("#projectPicker", projectId);
 await page.waitForFunction(
   (id) => typeof P !== "undefined" && P && P.id === id
           && LOAD_SETTLED === LOAD_SEQ, projectId,
   { timeout: 15000 });
+check("boot: picking a project still loads it", true, projectId);
 
 // ---------------------------------------------------------------- step 1
 const STORY = "A courier drives to the coast at dusk and does not stop.";
@@ -492,6 +529,47 @@ for (const [id, label] of [["cancelSegmentBtn", "segment"],
   check(`cancel: the ${label} button exists and is hidden when idle`,
         present === 1 && hidden);
 }
+
+// ------------------------------------------------------------ back to blank
+// New is a blank form now, not a prompt and a directory.
+const wasThere = await projectCount();
+await page.selectOption("#projectPicker", "");
+await page.waitForFunction(
+  () => typeof P !== "undefined" && P && P.id === "" && LOAD_SETTLED === LOAD_SEQ,
+  null, { timeout: 15000 });
+check("new: choosing New project clears the form without writing one",
+      (await page.inputValue("#story")) === ""
+      && (await page.inputValue("#projName")) === ""
+      && (await projectCount()) === wasThere,
+      `${wasThere} projects before and after`);
+check("new: and there is nothing to delete again",
+      await page.locator("#deleteProjectBtn").isDisabled());
+
+// A draft becomes real the moment something has to be remembered. Picking an
+// engine is the cheapest way to prove it: the server validates the choice and
+// resets the params behind it, so it cannot be kept on a draft in the page
+// without the page holding a copy of the rules.
+await page.fill("#projName", "draft becomes real");
+const other = await page.evaluate(
+  () => Object.keys(ENGINES.engines).find((k) => k !== P.engine));
+await page.locator("#engineList .engine").nth(
+  await page.evaluate((k) => Object.keys(ENGINES.engines).indexOf(k), other)).click();
+// Waiting on P.id alone lands between the two halves of the click: the project
+// is created, and the engine it was clicked for has not been sent yet.
+await page.waitForFunction((k) => typeof P !== "undefined" && P && P.engine === k,
+                           other, { timeout: 15000 });
+const born = await page.evaluate(() => ({ id: P.id, name: P.name, engine: P.engine }));
+check("new: choosing a setting is what writes the project",
+      born.id !== "" && born.engine === other && (await projectCount()) === wasThere + 1,
+      JSON.stringify(born));
+check("new: and the name typed into the form is the one it gets",
+      born.name === "draft becomes real", born.name);
+check("new: which is now a project you can delete",
+      !(await page.locator("#deleteProjectBtn").isDisabled()));
+
+await page.evaluate((id) => fetch(`/api/projects/${id}`, { method: "DELETE" }), born.id);
+check("new: the check leaves nothing behind",
+      (await projectCount()) === wasThere, `${wasThere} expected`);
 
 // ---------------------------------------------------------------- the page itself
 const nonce = await page.evaluate(() =>
